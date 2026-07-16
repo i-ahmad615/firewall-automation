@@ -1,0 +1,9 @@
+# Allowed IP list -- IPs listed here will NEVER be blocked.
+# One IP address per line.  Lines starting with # are comments.
+# Blank lines are ignored.
+#
+# Example entries:
+# 192.168.1.10
+# 10.0.0.5
+# 172.16.20.50
+69.5.169.188

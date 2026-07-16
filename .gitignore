@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/
+dist/
+.docx
+SETUP.md
+Security Alert Automation.pdf
+Security Alert Automation.docx
+.mcp.json
