@@ -78,6 +78,15 @@ class AppConfig:
     log_level: str
     poll_interval: int
     run_loop: bool
+    database_path: str = "data/app.db"
+    firewall_ping_interval: int = 60
+
+    # Dashboard
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8765
+    auto_open_browser: bool = True
+    admin_username: str = "admin"
+    admin_password: str = ""
 
 
 def _env_bool(name: str, default: str) -> bool:
@@ -169,9 +178,11 @@ def load_config() -> AppConfig:
         imap_timeout = int(os.environ.get("IMAP_TIMEOUT", "30"))
         smtp_timeout = int(os.environ.get("SMTP_TIMEOUT", "30"))
         poll_interval = int(os.environ.get("IMAP_POLL_INTERVAL", "60"))
+        firewall_ping_interval = int(os.environ.get("FIREWALL_PING_INTERVAL", "60"))
     except ValueError as exc:
         raise EnvironmentError(
-            "IMAP_TIMEOUT, SMTP_TIMEOUT, and IMAP_POLL_INTERVAL must be integers"
+            "IMAP_TIMEOUT, SMTP_TIMEOUT, IMAP_POLL_INTERVAL, and "
+            "FIREWALL_PING_INTERVAL must be integers"
         ) from exc
 
     keywords_raw = os.environ.get("ALERT_KEYWORDS", "")
@@ -192,6 +203,7 @@ def load_config() -> AppConfig:
         firewall_rule_name=_validate_non_empty(
             "FIREWALL_RULE_NAME", os.environ["FIREWALL_RULE_NAME"]
         ),
+        firewall_ping_interval=firewall_ping_interval,
         imap_host=_validate_non_empty("IMAP_HOST", os.environ["IMAP_HOST"]),
         imap_port=imap_port,
         imap_use_ssl=imap_use_ssl,
@@ -218,6 +230,14 @@ def load_config() -> AppConfig:
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
         poll_interval=poll_interval,
         run_loop=_env_bool("IMAP_RUN_LOOP", "true"),
+        database_path=os.environ.get("DATABASE_PATH", "data/app.db").strip(),
+        dashboard_host=os.environ.get("DASHBOARD_HOST", "127.0.0.1").strip(),
+        dashboard_port=_validate_port(
+            "DASHBOARD_PORT", os.environ.get("DASHBOARD_PORT", "8765")
+        ),
+        auto_open_browser=_env_bool("DASHBOARD_AUTO_OPEN_BROWSER", "true"),
+        admin_username=os.environ.get("DASHBOARD_ADMIN_USERNAME", "admin").strip(),
+        admin_password=os.environ.get("DASHBOARD_ADMIN_PASSWORD", "").strip(),
     )
 
 

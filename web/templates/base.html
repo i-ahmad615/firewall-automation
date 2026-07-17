@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Security Operations{% endblock %} · SecOps Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script>
+    // Applied before first paint to avoid a flash of the wrong sidebar state.
+    (function () {
+      try {
+        if (localStorage.getItem('sidebarPinned') === 'true') {
+          document.documentElement.classList.add('sidebar-pinned');
+        }
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <img src="/static/img/century-logo.png" alt="Century Paper &amp; Board Mills" class="brand-logo">
+        </div>
+        <div class="brand-text">
+          <strong>SecOps</strong>
+          <span>Automation</span>
+        </div>
+        <button class="sidebar-pin" id="sidebar-pin" type="button" title="Pin sidebar open" aria-label="Pin sidebar open" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+
+      <nav class="nav-group">
+        <a class="nav-item {% if active == 'dashboard' %}active{% endif %}" href="/" title="Dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+          <span class="nav-text">Dashboard</span>
+        </a>
+        <a class="nav-item {% if active == 'alerts' %}active{% endif %}" href="/alerts" title="Alert History">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 16H3l9-16z" stroke-linejoin="round"/><path d="M12 10v4" stroke-linecap="round"/><circle cx="12" cy="17.5" r="0.6" fill="currentColor" stroke="none"/></svg>
+          <span class="nav-text">Alert History</span>
+        </a>
+        <a class="nav-item {% if active == 'firewall' %}active{% endif %}" href="/firewall" title="Firewall Actions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/></svg>
+          <span class="nav-text">Firewall Actions</span>
+        </a>
+        <a class="nav-item {% if active == 'allowed-ips' %}active{% endif %}" href="/allowed-ips" title="Allowed IPs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nav-text">Allowed IPs</span>
+        </a>
+        <a class="nav-item {% if active == 'logs' %}active{% endif %}" href="/logs" title="Logs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z" rx="2"/><path d="M8 9h8M8 13h8M8 17h5" stroke-linecap="round"/></svg>
+          <span class="nav-text">Logs</span>
+        </a>
+
+        <div class="nav-label">Configuration</div>
+        <a class="nav-item {% if active == 'settings' %}active{% endif %}" href="/settings" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="nav-text">Settings</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="/logout" title="Sign out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke-linecap="round"/><path d="M16 17l5-5-5-5M21 12H9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nav-text">Sign out</span>
+        </a>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="flex items-center gap-3">
+          <h1>{% block heading %}Dashboard{% endblock %}</h1>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="live-pill"><span class="live-dot"></span>Monitoring active</span>
+          <button class="status-pill checking" id="firewall-status-pill" type="button" title="Click to test firewall connectivity">
+            <span class="status-dot"></span><span id="firewall-status-label">Firewall: checking…</span>
+          </button>
+          <span class="topbar-meta" id="clock"></span>
+        </div>
+      </header>
+      <div class="content">
+        {% block content %}{% endblock %}
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/common.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

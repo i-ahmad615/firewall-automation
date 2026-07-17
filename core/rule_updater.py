@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Literal, Optional
 
+from . import database
 from .config import AppConfig, load_allowed_ips, is_ip_allowed
 from .firewall_client import SophosClient, FirewallAPIError
 from .xml_handler import (
@@ -77,6 +78,11 @@ def block_ip(
             "IP %s is whitelisted in %s -- no action taken",
             ip, config.allowed_ips_file,
         )
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="allowed",
+            allowed_list=True, status="success",
+            detail=f"IP is whitelisted in {config.allowed_ips_file}",
+        )
         return "allowed"
 
     # ── 2-6. Firewall interaction ─────────────────────────────────────
@@ -105,6 +111,11 @@ def block_ip(
             logger.info(
                 "IP %s is already in rule %r -- no upload needed",
                 ip, rule_name,
+            )
+            database.record_firewall_action(
+                ip=ip, rule_name=rule_name, result="duplicate",
+                duplicate=True, status="success",
+                detail="IP already present in rule -- no upload needed",
             )
             return "duplicate"
 
@@ -173,22 +184,42 @@ def block_ip(
             "Rule %r updated and VERIFIED -- %s blocked via host object %r",
             rule_name, ip, host_name,
         )
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="blocked", status="success",
+            detail=f"Appended host object {host_name!r} and verified on firewall",
+        )
         return "blocked"
 
     except RuleNotFoundError as exc:
         logger.error("Rule not found: %s", exc)
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="failed", status="failure",
+            detail=str(exc),
+        )
         raise RuleUpdateError(str(exc)) from exc
     except InvalidXMLError as exc:
         logger.error("Invalid XML: %s", exc)
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="failed", status="failure",
+            detail=str(exc),
+        )
         raise RuleUpdateError(str(exc)) from exc
     except FirewallAPIError as exc:
         last = client.last_response[:500] if client else ""
         logger.error(
             "Firewall API error: %s | last response: %.500s", exc, last
         )
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="failed", status="failure",
+            detail=str(exc),
+        )
         raise RuleUpdateError(str(exc)) from exc
     except Exception as exc:
         logger.exception("Unexpected exception while blocking %s: %s", ip, exc)
+        database.record_firewall_action(
+            ip=ip, rule_name=rule_name, result="failed", status="failure",
+            detail=str(exc),
+        )
         raise RuleUpdateError(str(exc)) from exc
     finally:
         if own_client and client is not None:

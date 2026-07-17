@@ -16,6 +16,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from . import database
 from .config import AppConfig
 from .email_client import EmailConnectionError, ImapMailbox, send_notification
 from .rule_updater import block_ip, RuleUpdateError
@@ -161,14 +162,29 @@ def _should_process(html: Optional[str], subject: str, config: AppConfig) -> boo
     return _find_matching_keyword(html, subject, config.alert_keywords) is not None
 
 
-def _notify(config: AppConfig, subject: str, body: str) -> None:
-    """Send a notification email; logs warnings but does not crash the monitor."""
+def _notify(config: AppConfig, subject: str, body: str) -> bool:
+    """Send a notification email; logs warnings but does not crash the monitor.
+
+    Returns True if the notification was sent successfully.
+    """
     try:
         send_notification(config, subject, body)
     except EmailConnectionError as exc:
         logger.warning("Notification not sent: %s", exc)
+        database.record_notification(
+            subject=subject, recipient=config.notification_email, status="failed"
+        )
+        return False
     except Exception as exc:
         logger.warning("Unexpected notification error: %s", exc)
+        database.record_notification(
+            subject=subject, recipient=config.notification_email, status="failed"
+        )
+        return False
+    database.record_notification(
+        subject=subject, recipient=config.notification_email, status="sent"
+    )
+    return True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,11 +210,19 @@ class EmailMonitor:
             logger.info(
                 "uid=%s: ignoring -- sender %r is not trusted", uid, from_header
             )
+            database.record_alert(
+                subject=subject, sender=from_header, status="ignored",
+                action_taken="ignored", reason="Sender is not trusted",
+            )
             return
 
         html = _extract_html(raw)
         if not html:
             logger.warning("uid=%s: no readable body -- skipping", uid)
+            database.record_alert(
+                subject=subject, sender=from_header, status="ignored",
+                action_taken="ignored", reason="No readable message body",
+            )
             return
 
         classification = _extract_classification(html)
@@ -213,6 +237,12 @@ class EmailMonitor:
                 classification or "<not found>",
                 ", ".join(sorted(self._config.alert_keywords)),
             )
+            database.record_alert(
+                subject=subject, sender=from_header,
+                classification=classification or "",
+                status="ignored", action_taken="ignored",
+                reason="Classification does not match configured alert keywords",
+            )
             return
 
         logger.info(
@@ -226,6 +256,12 @@ class EmailMonitor:
             logger.warning(
                 "uid=%s: could not extract Origin IP from alert -- skipping", uid
             )
+            database.record_alert(
+                subject=subject, sender=from_header,
+                classification=classification or "",
+                status="processed", action_taken="failed",
+                reason="Could not extract Origin IP from alert body",
+            )
             return
 
         logger.info("uid=%s: Origin IP extracted: %s", uid, origin_ip)
@@ -234,7 +270,7 @@ class EmailMonitor:
             result = block_ip(origin_ip, self._config)
         except RuleUpdateError as exc:
             logger.error("Failed to block %s: %s", origin_ip, exc)
-            _notify(
+            notified = _notify(
                 self._config,
                 subject=f"[ALERT] Failed to block {origin_ip}",
                 body=(
@@ -242,21 +278,40 @@ class EmailMonitor:
                     f"Error: {exc}\n\nOriginating alert: {subject}"
                 ),
             )
+            database.record_alert(
+                subject=subject, sender=from_header, origin_ip=origin_ip,
+                classification=classification or "",
+                status="processed", action_taken="failed",
+                reason=str(exc), notification_sent=notified,
+            )
+            database.reserve_pending_block(origin_ip, str(exc))
             return
 
         if result == "allowed":
             logger.info("IP %s is whitelisted -- no action taken", origin_ip)
+            database.record_alert(
+                subject=subject, sender=from_header, origin_ip=origin_ip,
+                classification=classification or "",
+                status="processed", action_taken="allowed",
+                reason="Origin IP is on the allow list",
+            )
         elif result == "duplicate":
             logger.info(
                 "IP %s already blocked in rule %r -- no update sent",
                 origin_ip, self._config.firewall_rule_name,
+            )
+            database.record_alert(
+                subject=subject, sender=from_header, origin_ip=origin_ip,
+                classification=classification or "",
+                status="processed", action_taken="duplicate",
+                reason="Origin IP already present in firewall rule",
             )
         elif result == "blocked":
             logger.info(
                 "IP %s successfully added to rule %r",
                 origin_ip, self._config.firewall_rule_name,
             )
-            _notify(
+            notified = _notify(
                 self._config,
                 subject=f"[BLOCKED] {origin_ip} added to firewall rule",
                 body=(
@@ -265,9 +320,64 @@ class EmailMonitor:
                     f"Originating alert: {subject}"
                 ),
             )
+            database.record_alert(
+                subject=subject, sender=from_header, origin_ip=origin_ip,
+                classification=classification or "",
+                status="processed", action_taken="blocked",
+                reason="Origin IP appended to firewall rule",
+                notification_sent=notified,
+            )
+
+    def _retry_pending_blocks(self) -> None:
+        """Retry every IP reserved after a prior failed block attempt.
+
+        Runs once per polling cycle, before new mail is processed. An IP
+        stays reserved (and keeps counting toward the Failed Blocks KPI)
+        until the firewall accepts it -- there is no retry limit.
+        """
+        recovered = database.sync_pending_blocks_from_alerts()
+        if recovered:
+            logger.info(
+                "Recovered %d historical failed block(s) into the retry queue",
+                recovered,
+            )
+        pending = database.list_pending_blocks()
+        if not pending:
+            return
+        logger.info("Retrying %d pending firewall block(s)", len(pending))
+        for entry in pending:
+            ip = entry["ip"]
+            try:
+                result = block_ip(ip, self._config)
+            except RuleUpdateError as exc:
+                logger.error(
+                    "Retry failed for %s (attempt %d): %s",
+                    ip, entry["attempts"] + 1, exc,
+                )
+                database.reserve_pending_block(ip, str(exc))
+                continue
+
+            logger.info(
+                "Retry succeeded for %s -- result=%r (attempt %d)",
+                ip, result, entry["attempts"] + 1,
+            )
+            notified = False
+            if result == "blocked":
+                notified = _notify(
+                    self._config,
+                    subject=f"[BLOCKED] {ip} added to firewall rule (resolved on retry)",
+                    body=(
+                        f"IP {ip} previously failed to block but has now been "
+                        f"successfully appended to the firewall rule "
+                        f"'{self._config.firewall_rule_name}' after "
+                        f"{entry['attempts'] + 1} attempt(s)."
+                    ),
+                )
+            database.resolve_pending_block(ip, result, notified=notified)
 
     def run_once(self) -> int:
         """Execute one IMAP polling cycle."""
+        self._retry_pending_blocks()
         mailbox = ImapMailbox(self._config)
         mailbox.connect()
         try:

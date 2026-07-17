@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Firewall Actions{% endblock %}
+{% block heading %}Firewall Actions{% endblock %}
+
+{% block content %}
+<section class="card panel">
+  <div class="panel-header">
+    <h2>Firewall Rule Updates</h2>
+    <div class="flex gap-2">
+      <a class="btn" href="/api/export/firewall_actions.csv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 21h16" stroke-linecap="round"/></svg>CSV</a>
+      <a class="btn" href="/api/export/firewall_actions.xlsx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 21h16" stroke-linecap="round"/></svg>Excel</a>
+      <button class="btn btn-danger" id="clear-all" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6" stroke-linecap="round" stroke-linejoin="round"/></svg>Clear All</button>
+    </div>
+  </div>
+
+  <div class="table-toolbar mt-2" style="margin-bottom: var(--space-4)">
+    <input class="input input-search" id="f-search" placeholder="Search IP, rule, detail…">
+    <select class="select" id="f-result">
+      <option value="">All results</option>
+      <option value="blocked">Blocked</option>
+      <option value="duplicate">Duplicate</option>
+      <option value="allowed">Allowed</option>
+      <option value="failed">Failed</option>
+    </select>
+    <select class="select" id="f-status">
+      <option value="">All statuses</option>
+      <option value="success">Success</option>
+      <option value="failure">Failure</option>
+    </select>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table" id="table">
+      <thead>
+        <tr>
+          <th data-key="occurred_at">Time</th>
+          <th data-key="ip">Blocked IP</th>
+          <th data-key="rule_name">Rule Updated</th>
+          <th data-key="result">Result</th>
+          <th>Duplicate</th>
+          <th>Allowed List</th>
+          <th>Notification</th>
+          <th data-key="status">Status</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+
+  <div class="pagination">
+    <span id="page-info"></span>
+    <div class="pagination-btns">
+      <button class="btn" id="prev-page">Previous</button>
+      <button class="btn" id="next-page">Next</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/firewall.js"></script>
+{% endblock %}

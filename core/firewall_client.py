@@ -11,6 +11,7 @@ are getting a firewall rule and updating a firewall rule.
 from __future__ import annotations
 
 import logging
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
@@ -30,6 +31,23 @@ _TOLERATED_CODES: frozenset[str] = frozenset({"502"})
 
 # Attributes SFOS adds to Get responses that must NOT be echoed back in a Set.
 _READONLY_ATTRIBUTES: frozenset[str] = frozenset({"transactionid"})
+
+
+_CREDENTIAL_TAGS: tuple[str, ...] = ("Username", "Password")
+_CREDENTIAL_RE = re.compile(
+    r"(<(?:" + "|".join(_CREDENTIAL_TAGS) + r")>).*?(</(?:" + "|".join(_CREDENTIAL_TAGS) + r")>)",
+    re.DOTALL,
+)
+
+
+def _redact_credentials(xml_text: str) -> str:
+    """Mask ``<Username>``/``<Password>`` element contents before logging.
+
+    SFOS's per-request auth mode embeds ``<Login>`` (with the plaintext
+    password) in *every* API call, not just ``authenticate()`` -- so this
+    must run on every logged request body, not only the login call.
+    """
+    return _CREDENTIAL_RE.sub(r"\1***REDACTED***\2", xml_text)
 
 
 def _strip_readonly_attributes(element: ET.Element) -> None:
@@ -58,7 +76,7 @@ class FirewallAPIError(Exception):
     ) -> None:
         super().__init__(message)
         self.code = code
-        self.response_text = response_text
+        self.response_text = _redact_credentials(response_text)
 
 
 @dataclass
@@ -114,7 +132,7 @@ class SophosClient:
 
     def _send(self, body: str, context: str = "") -> ET.Element:
         """POST *body* as ``reqxml`` form data and return the parsed XML root."""
-        logger.info("SFOS >> [%s] %.400s", context, body)
+        logger.info("SFOS >> [%s] %.400s", context, _redact_credentials(body))
         resp = requests.post(
             self._base_url,
             data={"reqxml": body},
@@ -122,7 +140,7 @@ class SophosClient:
             timeout=self.timeout,
         )
         self._last_response = resp.text
-        logger.info("SFOS << [%s] %.600s", context, resp.text)
+        logger.info("SFOS << [%s] %.600s", context, _redact_credentials(resp.text))
         resp.raise_for_status()
         try:
             return ET.fromstring(resp.text)
@@ -141,7 +159,7 @@ class SophosClient:
             msg = (status.text or f"code {code}").strip()
             logger.error(
                 "SFOS write failure [%s]: code=%s msg=%s | %.800s",
-                context, code, msg, self._last_response,
+                context, code, msg, _redact_credentials(self._last_response),
             )
             raise FirewallAPIError(
                 f"SFOS API error during {context}: code={code}, {msg}",
@@ -225,11 +243,12 @@ class SophosClient:
         )
         xml_body = self._build_request(payload)
         logger.info(
-            "DEBUG create_ip_host request XML: %.500s", xml_body
+            "DEBUG create_ip_host request XML: %.500s", _redact_credentials(xml_body)
         )
         root = self._send(xml_body, f"create_ip_host({name!r}={ip!r})")
         logger.info(
-            "DEBUG create_ip_host SFOS response: %.500s", self._last_response
+            "DEBUG create_ip_host SFOS response: %.500s",
+            _redact_credentials(self._last_response),
         )
         self._check_write_status(root, f"create_ip_host({name!r})")
         logger.info("IP host %r (%s) confirmed on SFOS", name, ip)
@@ -289,5 +308,38 @@ class SophosClient:
 
     @property
     def last_response(self) -> str:
-        """Raw text of the most recent SFOS response (for diagnostics)."""
-        return self._last_response
+        """Text of the most recent SFOS response, with credentials redacted.
+
+        Safe to log directly -- callers (e.g. ``rule_updater``) do exactly
+        that on failure.
+        """
+        return _redact_credentials(self._last_response)
+
+
+def ping(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    timeout: int = 10,
+) -> tuple[bool, str]:
+    """Lightweight connectivity check -- authenticate and immediately log out.
+
+    Returns ``(True, "")`` on success or ``(False, error_message)`` on any
+    connection, authentication, or API failure. Never raises.
+    """
+    client = SophosClient(host=host, port=port, username=username, password=password, timeout=timeout)
+    try:
+        client.authenticate()
+        return True, ""
+    except FirewallAPIError as exc:
+        return False, str(exc)
+    except requests.RequestException as exc:
+        return False, str(exc)
+    except Exception as exc:  # pragma: no cover -- defensive catch-all
+        return False, str(exc)
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass

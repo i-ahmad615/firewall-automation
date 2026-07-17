@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Allowed IPs{% endblock %}
+{% block heading %}Allowed IPs{% endblock %}
+
+{% block content %}
+<section class="card panel">
+  <div class="panel-header">
+    <h2>Allow List</h2>
+    <span class="hint">IP addresses below are never blocked by the firewall automation</span>
+  </div>
+
+  <form id="add-ip-form" class="table-toolbar" style="margin-bottom: var(--space-4)">
+    <input class="input input-search" id="new-ip" placeholder="e.g. 192.168.1.10" autocomplete="off">
+    <button class="btn btn-primary" type="submit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+      Add IP
+    </button>
+  </form>
+
+  <div id="form-error" class="alert-banner error" style="display:none; margin-bottom: var(--space-4)"></div>
+
+  <div class="table-wrap">
+    <table class="data-table" id="table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>IP Address</th>
+          <th style="width: 100px">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+
+  <div class="pagination">
+    <span id="page-info"></span>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/allowed_ips.js"></script>
+{% endblock %}

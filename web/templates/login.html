@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · SecOps Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="login-shell">
+    <div class="card login-card">
+      <div class="login-brand">
+        <img src="/static/img/century-logo.png" alt="Century Paper &amp; Board Mills" class="login-logo">
+        <div class="brand-text">
+          <strong>CPBM x SecOps</strong>
+          <span>Firewall Automation</span>
+        </div>
+      </div>
+      <div class="text-center">
+        <h1>Administrator Sign-In</h1>
+      </div>
+
+      {% if error %}
+      <div class="alert-banner error">Invalid username or password.</div>
+      {% endif %}
+
+      <form method="post" action="/login" class="flex flex-col gap-3">
+        <input type="hidden" name="next" value="{{ request.query_params.get('next', '/') }}">
+        <div class="field-group">
+          <label for="username">Username</label>
+          <input class="input" type="text" id="username" name="username" required autofocus>
+        </div>
+        <div class="field-group">
+          <label for="password">Password</label>
+          <input class="input" type="password" id="password" name="password" required>
+        </div>
+        <div class="flex justify-center">
+          <button type="submit" class="btn btn-primary btn-sm">Sign In</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

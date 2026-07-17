@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block heading %}Application Settings{% endblock %}
+
+{% macro field(key, spec) %}
+  <div class="field-group">
+    <label for="{{ key }}">{{ key.replace('_', ' ').title() }}</label>
+    {% if spec.type == 'bool' %}
+      <div class="field-check">
+        <input type="checkbox" id="{{ key }}" name="{{ key }}" {% if spec.value.lower() == 'true' %}checked{% endif %}>
+        <span class="field-hint">Enabled</span>
+      </div>
+    {% elif spec.type == 'select' %}
+      <select class="select" id="{{ key }}" name="{{ key }}">
+        {% for choice in spec.choices %}
+          <option value="{{ choice }}" {% if choice == spec.value %}selected{% endif %}>{{ choice }}</option>
+        {% endfor %}
+      </select>
+    {% elif spec.type == 'password' %}
+      <input class="input" type="password" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}" autocomplete="new-password">
+      <span class="field-hint">Leave as-is to keep the current value unchanged.</span>
+    {% elif spec.type == 'number' %}
+      <input class="input" type="number" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}">
+    {% else %}
+      <input class="input" type="text" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}">
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+{% if saved %}
+<div class="alert-banner success">
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+  Settings saved. Restart the application for changes to take effect.
+</div>
+{% endif %}
+{% if error %}
+<div class="alert-banner error">
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v5M12 16h.01"/><circle cx="12" cy="12" r="9"/></svg>
+  {{ error }}
+</div>
+{% endif %}
+
+<form method="post" action="/settings">
+  <div class="settings-grid">
+    <div class="card panel">
+      <div class="panel-header"><h2>IMAP (Inbound Alert Polling)</h2></div>
+      {% for key, spec in sections.imap.items() %}{{ field(key, spec) }}{% endfor %}
+    </div>
+
+    <div class="card panel">
+      <div class="panel-header"><h2>SMTP (Outbound Notifications)</h2></div>
+      {% for key, spec in sections.smtp.items() %}{{ field(key, spec) }}{% endfor %}
+    </div>
+
+    <div class="card panel">
+      <div class="panel-header"><h2>Firewall</h2></div>
+      {% for key, spec in sections.firewall.items() %}{{ field(key, spec) }}{% endfor %}
+    </div>
+
+    <div class="card panel">
+      <div class="panel-header"><h2>Application</h2></div>
+      {% for key, spec in sections.application.items() %}{{ field(key, spec) }}{% endfor %}
+    </div>
+  </div>
+
+  <div class="flex gap-3 mt-2">
+    <button type="submit" class="btn btn-primary">Save Settings</button>
+    <span class="text-sm text-muted flex items-center">Values are written back to .env safely -- comments and ordering are preserved.</span>
+  </div>
+</form>
+{% endblock %}

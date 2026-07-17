@@ -1,11 +1,26 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Secrets / local configuration
 .env
+.mcp.json
+
+# Runtime data (SQLite database, session secret, IMAP/UID state)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Application logs
 logs/
+
+# Build artifacts / internal docs
 dist/
-.docx
+*.docx
 SETUP.md
 Security Alert Automation.pdf
 Security Alert Automation.docx
-.mcp.json

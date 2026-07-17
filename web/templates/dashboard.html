@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block heading %}Security Operations Overview{% endblock %}
+
+{% block content %}
+<section class="stat-grid" id="stat-grid">
+  <!-- populated by dashboard.js -->
+</section>
+
+<section class="section-grid">
+  <div class="card panel">
+    <div class="panel-header">
+      <h2>Alert Volume (14 days)</h2>
+      <span class="hint">Total processed vs. blocked</span>
+    </div>
+    <div class="chart-wrap">
+      <svg id="chart-timeseries" style="width:100%;height:220px"></svg>
+    </div>
+    <div class="chart-legend">
+      <span class="legend-item"><span class="legend-swatch" style="background:#5aa9e6"></span>Total processed</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#7bc9a0"></span>Blocked</span>
+    </div>
+  </div>
+
+  <div class="card panel">
+    <div class="panel-header">
+      <h2>Action Breakdown</h2>
+    </div>
+    <div class="chart-wrap">
+      <svg id="chart-breakdown" style="width:100%;height:220px"></svg>
+    </div>
+  </div>
+</section>
+
+<section class="card panel">
+  <div class="panel-header">
+    <h2>Live Activity Feed</h2>
+    <span class="live-pill"><span class="live-dot"></span>Streaming</span>
+  </div>
+  <div class="feed" id="live-feed">
+    <div class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+      <span>Waiting for activity…</span>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}
