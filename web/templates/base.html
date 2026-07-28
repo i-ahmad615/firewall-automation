@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Security Operations{% endblock %} · SecOps Dashboard</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260728-4">
   <script>
     // Applied before first paint to avoid a flash of the wrong sidebar state.
     (function () {
@@ -25,7 +25,6 @@
         </div>
         <div class="brand-text">
           <strong>SecOps</strong>
-          <span>Automation</span>
         </div>
         <button class="sidebar-pin" id="sidebar-pin" type="button" title="Pin sidebar open" aria-label="Pin sidebar open" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6z" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -45,9 +44,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/></svg>
           <span class="nav-text">Firewall Actions</span>
         </a>
+        <a class="nav-item {% if active == 'failed-ip-queue' %}active{% endif %}" href="/failed-ip-queue" title="Failed IP Queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nav-text">Failed IP Queue</span>
+        </a>
         <a class="nav-item {% if active == 'allowed-ips' %}active{% endif %}" href="/allowed-ips" title="Allowed IPs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span class="nav-text">Allowed IPs</span>
+        </a>
+        <a class="nav-item {% if active == 'manual-ip-actions' %}active{% endif %}" href="/manual-ip-actions" title="Manual IP Actions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="nav-text">Manual IP Actions</span>
         </a>
         <a class="nav-item {% if active == 'logs' %}active{% endif %}" href="/logs" title="Logs">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z" rx="2"/><path d="M8 9h8M8 13h8M8 17h5" stroke-linecap="round"/></svg>
@@ -74,10 +81,20 @@
         <div class="flex items-center gap-3">
           <h1>{% block heading %}Dashboard{% endblock %}</h1>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 topbar-statuses">
           <span class="live-pill"><span class="live-dot"></span>Monitoring active</span>
           <button class="status-pill checking" id="firewall-status-pill" type="button" title="Click to test firewall connectivity">
             <span class="status-dot"></span><span id="firewall-status-label">Firewall: checking…</span>
+          </button>
+          <a class="firewall-console-link" href="/firewall-console" target="_blank" rel="noopener noreferrer" title="Open the configured Sophos firewall console in a new tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3h7v7M10 14L21 3" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Open Firewall</span>
+          </a>
+          <button class="status-pill checking" id="imap-status-pill" type="button" title="Click to test inbound mail (IMAP) connectivity">
+            <span class="status-dot"></span><span id="imap-status-label">IMAP: checking…</span>
+          </button>
+          <button class="status-pill checking" id="smtp-status-pill" type="button" title="Click to test outbound mail (SMTP) connectivity">
+            <span class="status-dot"></span><span id="smtp-status-label">SMTP: checking…</span>
           </button>
           <span class="topbar-meta" id="clock"></span>
         </div>
@@ -88,7 +105,7 @@
     </div>
   </div>
 
-  <script src="/static/js/common.js"></script>
+  <script src="/static/js/common.js?v=20260728-3"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

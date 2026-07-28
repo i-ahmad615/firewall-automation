@@ -8,20 +8,69 @@ from __future__ import annotations
 
 import imaplib
 import logging
+import re
 import smtplib
 import ssl
+from dataclasses import dataclass
+from datetime import datetime
 from email.message import EmailMessage
-from typing import Optional
+from typing import Iterable, Optional
 
 from .config import AppConfig
+from . import email_status
 
-logger = logging.getLogger(__name__)
+logger = logging.LoggerAdapter(logging.getLogger(__name__), {"technical": True})
 
 _DEFAULT_TIMEOUT = 30
+_INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"', re.IGNORECASE)
+
+
+def _parse_internaldate(fetch_metadata: object) -> Optional[datetime]:
+    """Parse an IMAP FETCH INTERNALDATE value when the server provides it."""
+    if not isinstance(fetch_metadata, bytes):
+        return None
+    match = _INTERNALDATE_RE.search(fetch_metadata)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(
+            match.group(1).decode("ascii"), "%d-%b-%Y %H:%M:%S %z"
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
 
 
 class EmailConnectionError(Exception):
     """Raised when IMAP or SMTP connection/authentication fails."""
+
+
+@dataclass(frozen=True)
+class ImapFolderState:
+    folder: str
+    uidvalidity: str
+
+
+def _last_imap_response_value(connection: object, name: str) -> str:
+    """Read a numeric SELECT response without exposing protocol data."""
+    values: object = None
+    try:
+        _typ, values = connection.response(name)  # type: ignore[attr-defined]
+    except Exception:
+        values = None
+    if not values:
+        try:
+            values = connection.untagged_responses.get(name, [])  # type: ignore[attr-defined]
+        except Exception:
+            values = []
+    if not isinstance(values, (list, tuple)):
+        return ""
+    for value in reversed(values):
+        if isinstance(value, bytes):
+            value = value.decode("ascii", errors="ignore")
+        match = re.search(r"\d+", str(value))
+        if match:
+            return match.group(0)
+    return ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -40,12 +89,11 @@ class ImapMailbox:
         cfg = self._config
         timeout = cfg.imap_timeout
         logger.info(
-            "IMAP connecting to %s:%s (ssl=%s, mailbox=%s, user=%s)",
+            "IMAP connecting to %s:%s (ssl=%s, mailbox=%s)",
             cfg.imap_host,
             cfg.imap_port,
             cfg.imap_use_ssl,
             cfg.imap_mailbox,
-            cfg.email_username,
         )
         try:
             if cfg.imap_use_ssl:
@@ -60,6 +108,7 @@ class ImapMailbox:
                     self._conn.starttls(ssl_context=ssl.create_default_context())
             self._conn.login(cfg.email_username, cfg.email_password)
         except imaplib.IMAP4.error as exc:
+            email_status.set_status("imap", False, str(exc))
             logger.error(
                 "IMAP authentication failed for %s@%s:%s: %s",
                 cfg.email_username, cfg.imap_host, cfg.imap_port, exc,
@@ -68,6 +117,7 @@ class ImapMailbox:
                 f"IMAP authentication failed for {cfg.email_username}: {exc}"
             ) from exc
         except OSError as exc:
+            email_status.set_status("imap", False, str(exc))
             logger.error(
                 "IMAP connection failed to %s:%s: %s",
                 cfg.imap_host, cfg.imap_port, exc,
@@ -79,6 +129,7 @@ class ImapMailbox:
             "IMAP authenticated successfully as %s on %s:%s",
             cfg.email_username, cfg.imap_host, cfg.imap_port,
         )
+        email_status.set_status("imap", True, "Authentication and connection succeeded")
 
     def disconnect(self) -> None:
         """Close the IMAP session (best-effort)."""
@@ -91,6 +142,59 @@ class ImapMailbox:
                 pass
         self._conn = None
         logger.debug("IMAP session closed")
+
+    def select_folder(self, folder: str) -> ImapFolderState:
+        """Select *folder* read-only and return its UIDVALIDITY generation."""
+        if self._conn is None:
+            raise EmailConnectionError("IMAP not connected")
+        typ, _ = self._conn.select(folder, readonly=True)
+        if typ != "OK":
+            raise EmailConnectionError(f"IMAP failed to select mailbox {folder!r}")
+        uidvalidity = _last_imap_response_value(self._conn, "UIDVALIDITY")
+        if not uidvalidity:
+            raise EmailConnectionError(
+                f"IMAP mailbox {folder!r} did not provide UIDVALIDITY"
+            )
+        logger.debug(
+            "IMAP folder selected | folder=%r uidvalidity=%s",
+            folder,
+            uidvalidity,
+        )
+        return ImapFolderState(folder=folder, uidvalidity=uidvalidity)
+
+    def search_uids_since(self, first_uid: int) -> list[str]:
+        """Return all UIDs at or above *first_uid*, independent of flags."""
+        if self._conn is None:
+            raise EmailConnectionError("IMAP not connected")
+        typ, data = self._conn.uid("SEARCH", None, "UID", f"{max(1, first_uid)}:*")
+        logger.debug(
+            "IMAP UID search response | first_uid=%d type=%s data=%r",
+            first_uid,
+            typ,
+            data,
+        )
+        if typ != "OK":
+            raise EmailConnectionError("IMAP UID search failed")
+        if not data or not data[0]:
+            return []
+        uids = [
+            value.decode("ascii") if isinstance(value, bytes) else str(value)
+            for value in data[0].split()
+        ]
+        return sorted((uid for uid in uids if uid.isdigit()), key=int)
+
+    def fetch_message_peek(self, uid: str) -> bytes:
+        """Fetch one full message without changing its ``\\Seen`` flag."""
+        if self._conn is None:
+            raise EmailConnectionError("IMAP not connected")
+        typ, msg_data = self._conn.uid("FETCH", uid, "(BODY.PEEK[])")
+        logger.debug("IMAP BODY.PEEK fetch | uid=%s type=%s", uid, typ)
+        if typ != "OK":
+            raise EmailConnectionError(f"IMAP failed to fetch UID {uid}")
+        for part in msg_data or []:
+            if isinstance(part, tuple) and len(part) >= 2 and isinstance(part[1], bytes):
+                return part[1]
+        raise EmailConnectionError(f"IMAP returned no message body for UID {uid}")
 
     def fetch_unread(self) -> list[tuple[str, bytes]]:
         """Return ``(uid, raw_bytes)`` tuples for unread messages."""
@@ -115,14 +219,14 @@ class ImapMailbox:
         )
 
         typ, data = self._conn.uid("SEARCH", "UNSEEN")
-        logger.info("IMAP SEARCH UNSEEN response: typ=%s data=%r", typ, data)
+        logger.debug("IMAP SEARCH UNSEEN response: typ=%s data=%r", typ, data)
 
         if typ != "OK":
             logger.warning("IMAP: SEARCH UNSEEN returned non-OK status: %s", typ)
             return []
 
         if not data or not data[0]:
-            logger.info("IMAP: no unread messages in %s", mailbox)
+            logger.debug("IMAP: no unread messages in %s", mailbox)
             return []
 
         uid_list = data[0].split()
@@ -143,7 +247,77 @@ class ImapMailbox:
                 if isinstance(part, tuple) and len(part) >= 2:
                     results.append((uid, part[1]))
                     break
-        logger.info("IMAP: fetched %d unread message(s) from %s", len(results), mailbox)
+        logger.debug("IMAP: fetched %d unread message(s) from %s", len(results), mailbox)
+        return results
+
+    def fetch_recent(
+        self,
+        since: datetime,
+        trusted_senders: Iterable[str],
+        max_messages: int,
+    ) -> list[tuple[str, bytes, Optional[datetime]]]:
+        """Return recent messages from trusted senders without changing flags.
+
+        IMAP's ``SINCE`` criterion is date-granular, so the caller performs
+        the exact hour-level cutoff using FETCH ``INTERNALDATE`` (falling back
+        to the message Date header if a server omits it). Searches are issued
+        per trusted sender and their UID results are de-duplicated.
+        ``BODY.PEEK[]`` plus a read-only mailbox selection preserves the
+        existing read/unread state.
+        """
+        if self._conn is None:
+            raise EmailConnectionError("IMAP not connected")
+        mailbox = self._config.imap_mailbox
+        typ, _ = self._conn.select(mailbox, readonly=True)
+        if typ != "OK":
+            raise EmailConnectionError(f"IMAP failed to select mailbox {mailbox!r}")
+
+        since_text = since.strftime("%d-%b-%Y")
+        found: set[str] = set()
+        for sender in sorted({value.strip() for value in trusted_senders if value.strip()}):
+            typ, data = self._conn.uid(
+                "SEARCH", None, "SINCE", since_text, "FROM", sender
+            )
+            if typ != "OK":
+                logger.warning(
+                    "IMAP catch-up search failed for trusted sender %s: %s",
+                    sender,
+                    typ,
+                )
+                continue
+            if data and data[0]:
+                for raw_uid in data[0].split():
+                    found.add(
+                        raw_uid.decode() if isinstance(raw_uid, bytes) else str(raw_uid)
+                    )
+
+        def _uid_order(value: str) -> tuple[int, str]:
+            try:
+                return (int(value), value)
+            except ValueError:
+                return (-1, value)
+
+        # Select the newest bounded set, then process it oldest-to-newest.
+        selected = sorted(found, key=_uid_order, reverse=True)[:max_messages]
+        selected.reverse()
+        results: list[tuple[str, bytes, Optional[datetime]]] = []
+        for uid in selected:
+            typ, msg_data = self._conn.uid(
+                "FETCH", uid, "(BODY.PEEK[] INTERNALDATE)"
+            )
+            if typ != "OK":
+                logger.warning("IMAP catch-up failed to fetch uid=%s", uid)
+                continue
+            for part in msg_data:
+                if isinstance(part, tuple) and len(part) >= 2:
+                    results.append((uid, part[1], _parse_internaldate(part[0])))
+                    break
+        logger.info(
+            "IMAP catch-up fetched %d trusted message(s) since %s (limit=%d)",
+            len(results),
+            since.isoformat(),
+            max_messages,
+        )
         return results
 
     def mark_seen(self, uid: str) -> None:
@@ -193,7 +367,7 @@ def _open_smtp_connection(config: AppConfig) -> smtplib.SMTP | smtplib.SMTP_SSL:
     )
     if config.smtp_use_tls:
         smtp.starttls(context=ssl_context)
-        logger.info("SMTP STARTTLS negotiated with %s:%s", config.smtp_host, config.smtp_port)
+        logger.debug("SMTP STARTTLS negotiated with %s:%s", config.smtp_host, config.smtp_port)
     return smtp
 
 
@@ -242,6 +416,7 @@ def send_notification(
         with _open_smtp_connection(config) as smtp:
             _smtp_login_and_send(smtp, config, msg, to_addr)
     except smtplib.SMTPAuthenticationError as exc:
+        email_status.set_status("smtp", False, str(exc))
         logger.error(
             "SMTP authentication failed for %s@%s:%s: %s",
             config.smtp_username, config.smtp_host, config.smtp_port, exc,
@@ -250,6 +425,7 @@ def send_notification(
             f"SMTP authentication failed for {config.smtp_username}: {exc}"
         ) from exc
     except OSError as exc:
+        email_status.set_status("smtp", False, str(exc))
         logger.error(
             "SMTP connection failed to %s:%s: %s",
             config.smtp_host, config.smtp_port, exc,
@@ -258,10 +434,36 @@ def send_notification(
             f"SMTP connection failed to {config.smtp_host}:{config.smtp_port}: {exc}"
         ) from exc
     except smtplib.SMTPException as exc:
+        email_status.set_status("smtp", False, str(exc))
         logger.error("SMTP send failed to %s: %s", to_addr, exc)
         raise EmailConnectionError(f"SMTP send failed: {exc}") from exc
 
-    logger.info("SMTP notification delivered to %s: %s", to_addr, subject)
+    logger.debug("SMTP notification delivered")
+    email_status.set_status("smtp", True, "Authentication and delivery succeeded")
+
+
+def check_smtp_connection(config: AppConfig) -> None:
+    """Connect and authenticate to SMTP without sending a message."""
+    logger.info(
+        "SMTP connectivity test to %s:%s (tls=%s, ssl=%s)",
+        config.smtp_host, config.smtp_port, config.smtp_use_tls, config.smtp_use_ssl,
+    )
+    try:
+        with _open_smtp_connection(config) as smtp:
+            if config.smtp_username and config.smtp_password:
+                smtp.login(config.smtp_username, config.smtp_password)
+            smtp.noop()
+    except smtplib.SMTPAuthenticationError as exc:
+        email_status.set_status("smtp", False, str(exc))
+        raise EmailConnectionError(
+            f"SMTP authentication failed for {config.smtp_username}: {exc}"
+        ) from exc
+    except (OSError, smtplib.SMTPException) as exc:
+        email_status.set_status("smtp", False, str(exc))
+        raise EmailConnectionError(
+            f"SMTP connection failed to {config.smtp_host}:{config.smtp_port}: {exc}"
+        ) from exc
+    email_status.set_status("smtp", True, "Authentication and connection succeeded")
 
 
 def _smtp_login_and_send(
@@ -273,9 +475,9 @@ def _smtp_login_and_send(
     """Authenticate (if credentials provided) and send *msg*."""
     if config.smtp_username and config.smtp_password:
         smtp.login(config.smtp_username, config.smtp_password)
-        logger.info("SMTP authenticated as %s", config.smtp_username)
+        logger.debug("SMTP authenticated")
     else:
         logger.warning("SMTP: no credentials configured -- sending without AUTH")
     smtp.send_message(msg)
-    logger.info("SMTP message accepted by %s:%s for recipient %s",
+    logger.debug("SMTP message accepted by %s:%s for recipient %s",
                 config.smtp_host, config.smtp_port, to_addr)

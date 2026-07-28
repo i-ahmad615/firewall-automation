@@ -40,7 +40,7 @@ with no separate frontend server or build step required.
 SOC alert email received
         │
         ▼
-Sender verified against TRUSTED_SENDER
+Sender verified against TRUSTED_SENDERS
         │ trusted?
         ▼
 Origin IP extracted from alert HTML
@@ -73,6 +73,14 @@ Upload updated rule to SFOS
 ---
 
 ## Setup guide (step by step)
+
+### Automatic Windows setup
+
+Double-click `setup.bat` from the project directory. It detects Python 3.10 or newer, creates or reuses `.venv`, installs the required packages, prepares runtime folders, and creates `.env` from `.env.example` only when `.env` is missing. Existing credentials are never overwritten.
+
+If a new `.env` is created, setup opens it in Notepad so you can enter the required IMAP, SMTP, firewall, and dashboard settings. After saving it, double-click `run_firewall.bat` to start the application.
+
+The manual commands below perform the same core setup steps.
 
 These commands assume **Windows PowerShell** and Python 3.10+ already
 installed. Run them from the project root.
@@ -131,8 +139,9 @@ python main.py
 
 That single command:
 
-1. Starts the email monitor in the background.
-2. Starts the firewall connectivity monitor in the background.
+1. Runs one bounded, status-aware email catch-up scan covering recent read and unread mail.
+2. Starts the normal live email monitor and existing firewall retry processing.
+3. Starts the firewall connectivity monitor in the background.
 3. Starts the web dashboard.
 4. Opens your default browser to the dashboard automatically.
 
@@ -150,9 +159,8 @@ machine only).
 - The **Dashboard** page should show live KPIs (all zero on a fresh install)
   and a "Firewall: online" pill in the top-right if the firewall is
   reachable.
-- Check `logs/app.log` (or the **Logs** page in the dashboard) for
-  `Configuration loaded`, `Email monitor started`, and
-  `Firewall connectivity monitor started` on startup.
+- Check `logs/application.log` (or the **Logs** page) for clean operational
+  events such as `Configuration loaded` and `Application services started`.
 
 ---
 
@@ -177,6 +185,8 @@ IMAP_PORT=993
 IMAP_USE_SSL=true
 IMAP_USE_STARTTLS=false
 IMAP_MAILBOX=INBOX
+IMAP_FOLDERS=INBOX
+IMAP_UID_RECONCILE_COUNT=20
 EMAIL_USERNAME=monitor@company.com
 EMAIL_PASSWORD=your_password
 
@@ -190,7 +200,7 @@ SMTP_USE_SSL=false
 NOTIFICATION_EMAIL=security-alerts@company.com
 
 # Alert filtering
-TRUSTED_SENDER=soc@centurypaper.com.pk
+TRUSTED_SENDERS=soc@centurypaper.com.pk, alerts@centurypaper.com.pk
 ALERT_KEYWORDS=attack
 
 # Allowed IPs
@@ -199,10 +209,14 @@ ALLOWED_IPS_FILE=config/allowed_ips.txt
 # Logging
 LOG_DIRECTORY=logs/
 LOG_LEVEL=INFO
+DEBUG_LOGGING=false
+DEBUG_LOG_MAX_CHARS=2000
 
 # Polling
 IMAP_POLL_INTERVAL=60
 IMAP_RUN_LOOP=true
+EMAIL_LOOKBACK_HOURS=24
+EMAIL_LOOKBACK_MAX_MESSAGES=200
 
 # Database
 DATABASE_PATH=data/app.db
@@ -227,16 +241,22 @@ DASHBOARD_ADMIN_PASSWORD=
 | `IMAP_USE_SSL` | `true` for implicit SSL (port 993 — Outlook/Gmail); `false` for plain IMAP | ✓ |
 | `EMAIL_USERNAME` / `EMAIL_PASSWORD` | Mailbox credentials used to read alerts | ✓ |
 | `IMAP_POLL_INTERVAL` | Seconds between IMAP polls (default: 60) | ✓ |
+| `IMAP_FOLDERS` | Comma-separated folders monitored by durable UID checkpoints (default: INBOX) | file only |
+| `IMAP_UID_RECONCILE_COUNT` | Recent UIDs rechecked after startup or reconnect (default: 20) | file only |
+| `EMAIL_LOOKBACK_HOURS` | Startup catch-up window in hours; invalid values fall back to 24 | file only |
+| `EMAIL_LOOKBACK_MAX_MESSAGES` | Maximum trusted messages examined during startup; invalid values fall back to 200 | file only |
 | `SMTP_HOST` / `SMTP_PORT` | SMTP server for sending notifications | ✓ |
 | `SMTP_USE_TLS` | `true` for STARTTLS (port 587 — Outlook); mutually exclusive with `SMTP_USE_SSL` | ✓ |
 | `SMTP_USE_SSL` | `true` for implicit SSL (port 465) | ✓ |
 | `NOTIFICATION_EMAIL` | Single recipient for block/failure notifications (shared mailbox or distro list) | ✓ |
 | `SMTP_FROM` | Optional From address (defaults to `EMAIL_USERNAME`); use for shared mailbox send-as | ✓ |
-| `TRUSTED_SENDER` | Only emails from this address are processed (case-insensitive) | ✓ |
+| `TRUSTED_SENDERS` | Comma-separated list of sender addresses; an email is processed if it matches any of them (case-insensitive). Legacy singular `TRUSTED_SENDER` is still accepted if this is unset | ✓ |
 | `ALERT_KEYWORDS` | Comma-separated keywords; the alert's classification must match at least one | ✓ |
 | `ALLOWED_IPS_FILE` | Path to the allowed-IP file (also editable from the Allowed IPs page) | file only |
 | `IMAP_RUN_LOOP` | `true` = poll continuously; `false` = run one cycle then exit | file only |
-| `LOG_DIRECTORY` / `LOG_LEVEL` | Log file location and verbosity | file only |
+| `LOG_DIRECTORY` / `LOG_LEVEL` | Production log directory and minimum operational level | file only |
+| `DEBUG_LOGGING` | Write redacted technical diagnostics to `debug.log` (default: false) | file only |
+| `DEBUG_LOG_MAX_CHARS` | Maximum technical payload length before truncation (default: 2000) | file only |
 | `DATABASE_PATH` | SQLite database file location (alerts, firewall actions, logs, stats) | file only |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` | Where the dashboard listens | ✓ |
 | `DASHBOARD_AUTO_OPEN_BROWSER` | Open the default browser automatically on startup | ✓ |
@@ -457,7 +477,7 @@ Each backend module has exactly one responsibility. The web layer reuses
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Log: `sender ... is not trusted` | Email is from the wrong address | Check `TRUSTED_SENDER` in `.env` |
+| Log: `sender ... is not trusted` | Email is from an address not in the trusted list | Check `TRUSTED_SENDERS` in `.env` |
 | Log: `classification ... does not match ALERT_KEYWORDS` | Alert text doesn't contain a configured keyword | Check `ALERT_KEYWORDS`, or leave broad |
 | Log: `IP ... is whitelisted` | IP is in `allowed_ips.txt` | Remove it from the Allowed IPs page/file if blocking is intended |
 | Log: `IP ... already blocked` | IP is already in the rule | No action needed |
@@ -466,7 +486,7 @@ Each backend module has exactly one responsibility. The web layer reuses
 | Log: `Retry failed for ...` | Firewall still unreachable/rejecting | Check firewall connectivity; the IP retries automatically every cycle |
 | `IMAP authentication failed` | Wrong credentials or IMAP disabled | Verify `EMAIL_USERNAME`/`EMAIL_PASSWORD`; ensure IMAP is enabled |
 | `SMTP authentication failed` | Wrong credentials or SMTP AUTH disabled | Verify SMTP AUTH is enabled; use an app password if MFA is on |
-| Notification appears in inbox as an unread alert | `TRUSTED_SENDER` matches the notification's From address | Set `SMTP_FROM` to a different address than `TRUSTED_SENDER` |
+| Notification appears in inbox as an unread alert | `TRUSTED_SENDERS` matches the notification's From address | Set `SMTP_FROM` to an address not listed in `TRUSTED_SENDERS` |
 
 ### Dashboard
 
@@ -480,10 +500,12 @@ Each backend module has exactly one responsibility. The web layer reuses
 ### Checking the log
 
 ```powershell
-Get-Content logs\app.log -Tail 50
+Get-Content logs\application.log -Tail 50
 ```
 
-Or use the **Logs** page in the dashboard for live, filterable, exportable
+Errors with diagnostic stack traces are written to `logs/error.log`. When
+`DEBUG_LOGGING=true`, redacted and truncated protocol details are isolated in
+`logs/debug.log`. Or use the **Logs** page for live, filterable, exportable
 structured logs.
 
 ### Verifying the rule in SFOS GUI

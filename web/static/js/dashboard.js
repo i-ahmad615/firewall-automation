@@ -2,7 +2,7 @@ const STAT_DEFS = [
   { key: 'total_emails_processed', label: 'Total Emails Processed', tone: 'primary', icon: 'mail', filter: {} },
   { key: 'attack_emails_detected', label: 'Attack Emails Detected', tone: 'danger', icon: 'alert', filter: { status: 'processed' } },
   { key: 'successful_blocks', label: 'Successful Blocks', tone: 'success', icon: 'shield', filter: { action_taken: 'blocked' } },
-  { key: 'failed_blocks', label: 'Failed Blocks', tone: 'warning', icon: 'x', filter: { action_taken: 'failed' } },
+  { key: 'failed_blocks', label: 'Failed Blocks', tone: 'warning', icon: 'x', href: '/failed-ip-queue' },
   { key: 'duplicate_ips', label: 'Duplicate IPs', tone: 'neutral', icon: 'copy', filter: { action_taken: 'duplicate' } },
   { key: 'allowed_ips_ignored', label: 'Allowed IPs Ignored', tone: 'neutral', icon: 'check', filter: { action_taken: 'allowed' } },
   { key: 'firewall_rule_updates', label: 'Firewall Rule Updates', tone: 'primary', icon: 'refresh', filter: { action_taken: 'blocked' } },
@@ -47,7 +47,7 @@ function renderStats(stats) {
 
   if (!statsGridBuilt) {
     grid.innerHTML = STAT_DEFS.map((def, i) => `
-      <div class="card stat-card tone-${def.tone} enter" style="animation-delay:${i * 60}ms" data-stat-key="${def.key}" title="Double-click to view in Alert History">
+      <div class="card stat-card tone-${def.tone} enter" style="animation-delay:${i * 60}ms" data-stat-key="${def.key}" title="${def.href ? 'Double-click to view Failed IP Queue' : 'Double-click to view in Alert History'}">
         <span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${ICONS[def.icon]}</svg></span>
         <span class="stat-label">${def.label}</span>
         <span class="stat-value" data-key="${def.key}">0</span>
@@ -55,7 +55,7 @@ function renderStats(stats) {
     `).join('');
     grid.querySelectorAll('.stat-card').forEach(card => {
       const def = STAT_DEFS.find(d => d.key === card.dataset.statKey);
-      if (def) card.addEventListener('dblclick', () => goToAlertsWithFilter(def.filter));
+      if (def) card.addEventListener('dblclick', () => def.href ? (window.location.href = def.href) : goToAlertsWithFilter(def.filter));
     });
     statsGridBuilt = true;
   }

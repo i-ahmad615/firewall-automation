@@ -1,12 +1,46 @@
-# Python
+# Python environments and bytecode
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Python test, type-checker, lint, and coverage caches
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.tmp_pytest*/
+
+# Python packaging/build output
+build/
+dist/
+*.egg-info/
+.eggs/
 
 # Secrets / local configuration
 .env
+.env.*
+!.env.example
 .mcp.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local IDE and AI-agent metadata
+.vscode/
+.idea/
+.claude/
+.codex/
+*.swp
+*.swo
 
 # Runtime data (SQLite database, session secret, IMAP/UID state)
 data/
@@ -14,13 +48,20 @@ data/
 *.db-journal
 *.db-wal
 *.db-shm
+allowed.txt
 
 # Application logs
 logs/
+*.log
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
 
 # Build artifacts / internal docs
-dist/
 *.docx
+*.csv
 SETUP.md
 Security Alert Automation.pdf
 Security Alert Automation.docx

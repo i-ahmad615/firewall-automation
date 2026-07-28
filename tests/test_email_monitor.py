@@ -81,11 +81,11 @@ def _build_raw_email(
 
 
 def _make_config(
-    trusted: str = "alerts@company.com",
+    trusted: str | frozenset[str] = "alerts@company.com",
     keywords: frozenset[str] = frozenset({"attack"}),
 ) -> MagicMock:
     cfg = MagicMock()
-    cfg.trusted_sender = trusted
+    cfg.trusted_senders = frozenset({trusted}) if isinstance(trusted, str) else frozenset(trusted)
     cfg.alert_keywords = keywords
     cfg.firewall_rule_name = "Block IP"
     return cfg
@@ -97,21 +97,41 @@ def _make_config(
 
 class TestIsTrustedSender:
     def test_exact_match_returns_true(self) -> None:
-        assert _is_from_trusted_sender("alerts@company.com", "alerts@company.com")
+        assert _is_from_trusted_sender("alerts@company.com", {"alerts@company.com"})
 
     def test_display_name_bracket_format(self) -> None:
         assert _is_from_trusted_sender(
-            "SOC Team <alerts@company.com>", "alerts@company.com"
+            "SOC Team <alerts@company.com>", {"alerts@company.com"}
         )
 
     def test_different_domain_returns_false(self) -> None:
-        assert not _is_from_trusted_sender("evil@attacker.com", "alerts@company.com")
+        assert not _is_from_trusted_sender("evil@attacker.com", {"alerts@company.com"})
 
     def test_case_insensitive(self) -> None:
-        assert _is_from_trusted_sender("Alerts@COMPANY.COM", "alerts@company.com")
+        assert _is_from_trusted_sender("Alerts@COMPANY.COM", {"alerts@company.com"})
 
     def test_empty_from_header_returns_false(self) -> None:
-        assert not _is_from_trusted_sender("", "alerts@company.com")
+        assert not _is_from_trusted_sender("", {"alerts@company.com"})
+
+    def test_empty_trusted_set_returns_false(self) -> None:
+        assert not _is_from_trusted_sender("alerts@company.com", frozenset())
+
+    def test_matches_any_of_multiple_trusted_senders(self) -> None:
+        trusted = frozenset({"soc@company.com", "alerts@company.com", "ops@company.com"})
+        assert _is_from_trusted_sender("alerts@company.com", trusted)
+        assert _is_from_trusted_sender("SOC@Company.com", trusted)
+        assert _is_from_trusted_sender("ops@company.com", trusted)
+
+    def test_does_not_match_when_absent_from_multiple(self) -> None:
+        trusted = frozenset({"soc@company.com", "alerts@company.com"})
+        assert not _is_from_trusted_sender("evil@attacker.com", trusted)
+
+    def test_case_insensitive_with_whitespace_padded_trusted_entries(self) -> None:
+        # Defensive: matches even if a trusted-list entry carries stray
+        # whitespace (shouldn't happen post-parse_trusted_senders, but the
+        # matcher itself doesn't assume its callers always normalize).
+        trusted = frozenset({" Alerts@Company.com "})
+        assert _is_from_trusted_sender("alerts@company.com", trusted)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -425,6 +445,41 @@ class TestEmailMonitorProcessing:
 
         mock_block.assert_not_called()
 
+    def test_second_of_multiple_trusted_senders_is_processed(self) -> None:
+        """A sender that matches ANY configured trusted address is processed,
+        not just the first one in the list."""
+        config = _make_config(
+            trusted=frozenset({"soc@company.com", "alerts@company.com"})
+        )
+        raw = _build_raw_email(
+            subject=SOC_SUBJECT,
+            from_="alerts@company.com",
+            html_body=ALERT_TABLE_HTML,
+        )
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked") as mock_block:
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("5", raw)
+
+        mock_block.assert_called_once_with("132.200.152.126", config)
+
+    def test_sender_outside_multiple_trusted_senders_skips(self) -> None:
+        config = _make_config(
+            trusted=frozenset({"soc@company.com", "alerts@company.com"})
+        )
+        raw = _build_raw_email(
+            subject=SOC_SUBJECT,
+            from_="evil@attacker.com",
+            html_body=ALERT_TABLE_HTML,
+        )
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip") as mock_block:
+            monitor._process_message("6", raw)
+
+        mock_block.assert_not_called()
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sender filtering (integration-style)
@@ -442,7 +497,7 @@ class TestEmailParsing:
         assert html is not None
         ip = _extract_origin_ip_from_html(html)
         assert ip == "132.200.152.126"
-        assert _is_from_trusted_sender(headers["from"], "alerts@company.com")
+        assert _is_from_trusted_sender(headers["from"], {"alerts@company.com"})
         assert _find_matching_keyword(html, headers["subject"], frozenset({"attack"})) == "attack"
         assert _extract_classification(html) == "Threat List Attack IP"
 
@@ -464,4 +519,4 @@ class TestEmailParsing:
             html_body=ALERT_TABLE_HTML,
         )
         headers = _parse_headers(raw)
-        assert not _is_from_trusted_sender(headers["from"], "alerts@company.com")
+        assert not _is_from_trusted_sender(headers["from"], {"alerts@company.com"})

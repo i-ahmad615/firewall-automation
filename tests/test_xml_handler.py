@@ -15,6 +15,7 @@ from core.xml_handler import (
     get_source_networks,
     ip_in_rule,
     append_ip_to_rule,
+    remove_ip_from_rule,
     make_host_name,
     validate_rule_xml,
     rule_element_to_str,
@@ -183,6 +184,52 @@ class TestAppendIpToRule:
         rule = _make_rule("Block IP", ["1.1.1.1"])
         append_ip_to_rule("2.2.2.2", rule)
         validate_rule_xml(rule)  # must not raise
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# remove_ip_from_rule
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestRemoveIpFromRule:
+    def test_removes_raw_ip(self) -> None:
+        rule = _make_rule("Block IP", ["1.1.1.1", "2.2.2.2"])
+        remove_ip_from_rule("1.1.1.1", rule)
+        assert "1.1.1.1" not in get_source_networks(rule)
+
+    def test_removes_host_name_variant(self) -> None:
+        rule = _make_rule("Block IP", ["blocked-1-1-1-1", "blocked-2-2-2-2"])
+        remove_ip_from_rule("1.1.1.1", rule)
+        networks = get_source_networks(rule)
+        assert "blocked-1-1-1-1" not in networks
+        assert "blocked-2-2-2-2" in networks
+
+    def test_other_entries_preserved(self) -> None:
+        rule = _make_rule("Block IP", ["1.1.1.1", "2.2.2.2", "3.3.3.3"])
+        remove_ip_from_rule("2.2.2.2", rule)
+        networks = get_source_networks(rule)
+        assert networks == ["1.1.1.1", "3.3.3.3"]
+
+    def test_raises_when_ip_absent(self) -> None:
+        rule = _make_rule("Block IP", ["1.1.1.1"])
+        with pytest.raises(InvalidXMLError):
+            remove_ip_from_rule("9.9.9.9", rule)
+
+    def test_raises_on_empty_rule(self) -> None:
+        rule = _make_rule("Block IP", [])
+        with pytest.raises(InvalidXMLError):
+            remove_ip_from_rule("1.1.1.1", rule)
+
+    def test_xml_still_valid_after_remove(self) -> None:
+        rule = _make_rule("Block IP", ["1.1.1.1", "2.2.2.2"])
+        remove_ip_from_rule("1.1.1.1", rule)
+        validate_rule_xml(rule)  # must not raise
+
+    def test_is_inverse_of_append(self) -> None:
+        rule = _make_rule("Block IP", ["1.1.1.1"])
+        append_ip_to_rule("9.9.9.9", rule)
+        assert "9.9.9.9" in get_source_networks(rule)
+        remove_ip_from_rule("9.9.9.9", rule)
+        assert get_source_networks(rule) == ["1.1.1.1"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

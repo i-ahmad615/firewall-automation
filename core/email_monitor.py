@@ -1,30 +1,105 @@
 """Email monitoring and alert extraction.
 
-Polls IMAP for unread messages, verifies the sender, extracts the Origin IP
+Polls IMAP by durable UID checkpoints, verifies the sender, extracts the Origin IP
 from the alert HTML, and delegates to :func:`rule_updater.block_ip`.
 Sends an SMTP notification on success or failure.
 """
 from __future__ import annotations
 
+import ipaddress
+import html as html_lib
+import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
-from email.utils import parseaddr
-from typing import Optional
+from email.utils import parseaddr, parsedate_to_datetime
+from typing import Any, Iterable, Optional
 
 from bs4 import BeautifulSoup
 
 from . import database
-from .config import AppConfig
+from .config import AppConfig, is_ip_allowed, load_allowed_ips
 from .email_client import EmailConnectionError, ImapMailbox, send_notification
+from .logger import SUCCESS
+from .firewall_errors import firewall_exception_message
 from .rule_updater import block_ip, RuleUpdateError
 
 logger = logging.getLogger(__name__)
 
 _ORIGIN_IP_KEYS: frozenset[str] = frozenset({"origin ip", "host (origin)"})
+_IMPACTED_IP_KEYS: frozenset[str] = frozenset(
+    {"impacted ip", "destination ip", "target ip", "host (impacted)"}
+)
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_FINAL_PROCESSING_STATUSES: frozenset[str] = frozenset({
+    "blocked_successfully",
+    "already_blocked",
+    "allowlisted",
+    "invalid_ip",
+    "manually_resolved",
+})
+_REPROCESSABLE_STATUSES: frozenset[str] = frozenset({
+    "no_keyword_match",
+    "not_processed",
+    "processing_failed",
+    "partial_parse",
+})
+
+# ── HTML sanitization for safe rendering on the Alert Details page ─────────
+# Original email bodies are stored verbatim (untouched) for audit purposes;
+# this allowlist-based sanitizer is applied only when producing a version
+# safe to render as live HTML. Denylisted tags are removed with their
+# content; anything else not on the allowlist is unwrapped (text kept, tag
+# dropped) rather than removed outright, so unexpected vendor-specific
+# markup degrades to plain text instead of vanishing.
+_SANITIZE_DENYLIST_TAGS: frozenset[str] = frozenset(
+    {"script", "style", "iframe", "object", "embed", "form", "link", "meta", "noscript", "svg"}
+)
+_SANITIZE_ALLOWED_TAGS: frozenset[str] = frozenset({
+    "table", "thead", "tbody", "tr", "td", "th", "p", "div", "span",
+    "b", "strong", "i", "em", "br", "a", "pre", "ul", "ol", "li",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "blockquote", "code",
+})
+_SANITIZE_ALLOWED_ATTRS: dict[str, frozenset[str]] = {
+    "a": frozenset({"href"}),
+    "table": frozenset({"border", "cellpadding", "cellspacing"}),
+    "td": frozenset({"colspan", "rowspan"}),
+    "th": frozenset({"colspan", "rowspan"}),
+}
+_UNSAFE_HREF_SCHEMES: tuple[str, ...] = ("javascript:", "data:", "vbscript:")
+
+
+def sanitize_email_html(html: str) -> str:
+    """Return *html* with scripts, event handlers, and unsafe schemes stripped.
+
+    Allowlist-based: denylisted tags (script/style/iframe/...) are removed
+    together with their content; every other tag not on the allowlist is
+    unwrapped (its text is kept, the tag itself is dropped); every attribute
+    not explicitly allowed for its tag is stripped (this alone removes all
+    ``on*`` event-handler attributes, since none are ever allowlisted).
+    """
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(_SANITIZE_DENYLIST_TAGS):
+        tag.decompose()
+    for tag in soup.find_all(True):
+        if tag.name not in _SANITIZE_ALLOWED_TAGS:
+            tag.unwrap()
+            continue
+        allowed_attrs = _SANITIZE_ALLOWED_ATTRS.get(tag.name, frozenset())
+        for attr in list(tag.attrs):
+            if attr not in allowed_attrs:
+                del tag.attrs[attr]
+        if tag.name == "a" and "href" in tag.attrs:
+            href = (tag.attrs.get("href") or "").strip()
+            normalized_href = re.sub(r"[\x00-\x20]+", "", href).lower()
+            if normalized_href.startswith(_UNSAFE_HREF_SCHEMES):
+                del tag.attrs["href"]
+    return str(soup)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -32,13 +107,32 @@ _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
-    """Extract subject, from, and date from *raw* RFC 822 bytes."""
+    """Extract the processing-relevant RFC 822 headers from *raw*."""
     msg = BytesParser(policy=policy.default).parsebytes(raw)
     return {
         "subject": str(msg.get("subject", "")),
         "from": str(msg.get("from", "")),
         "date": str(msg.get("date", "")),
+        "message_id": str(msg.get("message-id", "")),
     }
+
+
+def _normalize_message_id(value: str) -> str:
+    """Normalize Message-ID for durable, case-insensitive de-duplication."""
+    return "".join(value.split()).lower()
+
+
+def _received_datetime(date_header: str) -> Optional[datetime]:
+    """Parse an email Date header into an aware UTC datetime."""
+    if not date_header:
+        return None
+    try:
+        value = parsedate_to_datetime(date_header)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _extract_html(raw: bytes) -> Optional[str]:
@@ -56,7 +150,7 @@ def _extract_html(raw: bytes) -> Optional[str]:
             if part.get_content_type() == "text/plain":
                 content = part.get_content()
                 if content and content.strip():
-                    return "<pre>" + content + "</pre>"
+                    return "<pre>" + html_lib.escape(content) + "</pre>"
         return None
 
     return _get_html(msg) or _get_plain(msg)
@@ -89,10 +183,11 @@ def _extract_origin_ip_from_html(html: str) -> Optional[str]:
     return None
 
 
-def _is_from_trusted_sender(from_header: str, trusted: str) -> bool:
-    """Return True if the ``From`` header matches *trusted* (case-insensitive)."""
+def _is_from_trusted_sender(from_header: str, trusted: Iterable[str]) -> bool:
+    """Return True if the ``From`` header matches any address in *trusted* (case-insensitive)."""
     _, addr = parseaddr(from_header)
-    return addr.strip().lower() == trusted.strip().lower()
+    addr = addr.strip().lower()
+    return any(addr == t.strip().lower() for t in trusted)
 
 
 _CLASSIFICATION_KEYS: frozenset[str] = frozenset({"classification"})
@@ -113,6 +208,68 @@ def _extract_classification(html: str) -> Optional[str]:
             key = " ".join(raw_key.replace("\u00a0", " ").lower().split())
             if key in _CLASSIFICATION_KEYS:
                 return cells[1].get_text(separator=" ", strip=True)
+    return None
+
+
+_ALARM_ID_KEYS: frozenset[str] = frozenset({"alarm id"})
+
+
+def _extract_alarm_id(html: str) -> Optional[str]:
+    """Return the ``Alarm ID`` cell value from the alert HTML table, if present."""
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            raw_key = cells[0].get_text(separator=" ", strip=True)
+            key = " ".join(raw_key.replace("\u00a0", " ").lower().split())
+            if key in _ALARM_ID_KEYS:
+                return cells[1].get_text(separator=" ", strip=True)
+    return None
+
+
+def _extract_all_fields(html: str) -> dict[str, str]:
+    """Return every key/value row found in the alert's HTML table(s).
+
+    Generic superset of the individual ``_extract_*`` helpers above --
+    captures whatever fields a given SOC alert email actually contains
+    (Alarm Date, Common Event, Description, Alarm Link, Rule Block,
+    Impacted IP, etc.) without needing a hardcoded key for each one. Keys
+    keep their original (whitespace-normalized) casing for display; if a
+    key repeats, the last occurrence wins.
+    """
+    fields: dict[str, str] = {}
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            raw_key = cells[0].get_text(separator=" ", strip=True)
+            key = " ".join(raw_key.replace("\u00a0", " ").split())
+            value = cells[1].get_text(separator=" ", strip=True)
+            if key:
+                fields[key] = value
+    return fields
+
+
+def _extract_impacted_ip(html: str) -> Optional[str]:
+    """Return the ``Impacted IP`` cell value from the alert HTML table, if present."""
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            raw_key = cells[0].get_text(separator=" ", strip=True)
+            key = " ".join(raw_key.replace("\u00a0", " ").lower().split())
+            if key not in _IMPACTED_IP_KEYS:
+                continue
+            value = cells[1].get_text(separator=" ", strip=True)
+            match = _IPV4_RE.search(value)
+            if match:
+                return match.group(0)
     return None
 
 
@@ -170,21 +327,36 @@ def _notify(config: AppConfig, subject: str, body: str) -> bool:
     try:
         send_notification(config, subject, body)
     except EmailConnectionError as exc:
-        logger.warning("Notification not sent: %s", exc)
+        logger.warning(
+            "Confirmation email not sent | Email service unavailable",
+            extra={"category": "Notification"},
+        )
+        logger.debug("Notification transport error: %s", exc, extra={"technical": True})
         database.record_notification(
-            subject=subject, recipient=config.notification_email, status="failed"
+            subject=subject, recipient=str(config.notification_email), status="failed"
         )
         return False
     except Exception as exc:
-        logger.warning("Unexpected notification error: %s", exc)
+        logger.warning(
+            "Confirmation email not sent | Unexpected email service error",
+            extra={"category": "Notification"},
+        )
+        logger.debug("Unexpected notification error: %s", exc, extra={"technical": True})
         database.record_notification(
-            subject=subject, recipient=config.notification_email, status="failed"
+            subject=subject, recipient=str(config.notification_email), status="failed"
         )
         return False
     database.record_notification(
-        subject=subject, recipient=config.notification_email, status="sent"
+        subject=subject, recipient=str(config.notification_email), status="sent"
     )
+    logger.info("Confirmation email sent", extra={"category": "Notification"})
     return True
+
+
+def _vcheck(check: str, passed: bool, message: str = "", *, skipped: bool = False) -> dict[str, str]:
+    """Build one entry for the per-alert validation-results list."""
+    result = "Skipped" if skipped else ("Passed" if passed else "Failed")
+    return {"check": check, "result": result, "message": message}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -196,137 +368,526 @@ class EmailMonitor:
 
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+        self._imap_account = (
+            f"{config.email_username.strip().lower()}|"
+            f"{config.imap_host.strip().lower()}:{config.imap_port}"
+        )
+        self._needs_uid_reconciliation = True
+        self._imap_connected: Optional[bool] = None
+        self._volatile_uid_checkpoints: dict[tuple[str, str], int] = {}
 
-    def _process_message(self, uid: str, raw: bytes) -> None:
+    def _process_message(
+        self,
+        uid: str,
+        raw: bytes,
+        *,
+        processing_source: str = "live_monitor",
+        received_at: Optional[str] = None,
+        existing_alert: Optional[dict[str, Any]] = None,
+        imap_account: str = "",
+        imap_folder: str = "",
+        imap_uidvalidity: str = "",
+        stored_email_id: Optional[int] = None,
+    ) -> str:
+        """Process one message through the shared live/catch-up pipeline."""
         headers = _parse_headers(raw)
         subject = headers.get("subject", "")
         from_header = headers.get("from", "")
+        message_id = _normalize_message_id(headers.get("message_id", ""))
+        received_dt = _received_datetime(headers.get("date", ""))
+        original_received_at = received_at or (
+            received_dt.isoformat() if received_dt else None
+        )
+        html = _extract_html(raw)
+        classification = _extract_classification(html or "")
+        alarm_id = _extract_alarm_id(html or "") or ""
+        parsed_fields = _extract_all_fields(html or "")
 
+        if existing_alert is None:
+            existing_alert = database.find_alert_by_message_identity(
+                message_id,
+                uid,
+                imap_folder,
+                imap_account,
+                imap_uidvalidity,
+            )
+        if existing_alert is None and processing_source == "startup_catchup":
+            existing_alert = database.find_legacy_alert(
+                subject=subject,
+                sender=from_header,
+                alarm_id=alarm_id,
+                email_body=html or "",
+            )
+
+        previous_status = (
+            (existing_alert or {}).get("processing_status") or "not_processed"
+        )
+        if existing_alert and previous_status in _FINAL_PROCESSING_STATUSES:
+            database.update_stored_email(
+                stored_email_id,
+                processing_status=previous_status,
+                alert_id=existing_alert.get("id"),
+            )
+            logger.debug(
+                "uid=%s message_id=%s: skipped final status=%s",
+                uid,
+                message_id or "<missing>",
+                previous_status,
+            )
+            return f"skipped:{previous_status}"
+        if existing_alert and previous_status not in _REPROCESSABLE_STATUSES:
+            database.update_stored_email(
+                stored_email_id,
+                processing_status=previous_status,
+                alert_id=existing_alert.get("id"),
+            )
+            logger.debug(
+                "uid=%s message_id=%s: skipped non-reprocessable status=%s",
+                uid,
+                message_id or "<missing>",
+                previous_status,
+            )
+            return f"skipped:{previous_status}"
+
+        alert_id = (existing_alert or {}).get("id")
+        identity_kwargs: dict[str, Any] = {
+            "subject": subject,
+            "sender": from_header,
+            "classification": classification or "",
+            "alarm_id": alarm_id,
+            "email_body": html or "",
+            "parsed_data": json.dumps(parsed_fields),
+            "message_id": message_id,
+            "imap_uid": uid,
+            "imap_account": imap_account,
+            "imap_folder": imap_folder,
+            "imap_uidvalidity": imap_uidvalidity,
+            "processing_source": processing_source,
+        }
+        if alert_id:
+            database.update_alert(alert_id, **identity_kwargs)
+        else:
+            alert_id = database.record_alert(
+                **identity_kwargs,
+                received_at=original_received_at,
+                status="processed",
+                action_taken="",
+                processing_status="not_processed",
+            )
+
+        def _save_result(processing_status: str, **values: Any) -> None:
+            payload = {**identity_kwargs, **values, "processing_status": processing_status}
+            if alert_id:
+                database.update_alert(alert_id, **payload)
+            else:
+                database.record_alert(
+                    **payload,
+                    received_at=original_received_at,
+                )
+            database.update_stored_email(
+                stored_email_id,
+                processing_status=processing_status,
+                alert_id=alert_id,
+            )
+
+        logger.debug(
+            "Email processing: uid=%s message_id=%s source=%s subject=%r from=%r",
+            uid,
+            message_id or "<missing>",
+            processing_source,
+            subject,
+            from_header,
+            extra={"technical": True},
+        )
+        checks: list[dict[str, str]] = []
+        trusted = _is_from_trusted_sender(from_header, self._config.trusted_senders)
+        checks.append(_vcheck(
+            "Trusted sender check", trusted,
+            "Sender matches a configured trusted address" if trusted
+            else f"{from_header!r} is not in TRUSTED_SENDERS",
+        ))
+        if not trusted:
+            logger.info(
+                "Alert ignored | Sender is not trusted",
+                extra={"category": "Alert Processing"},
+            )
+            _save_result(
+                "untrusted_sender",
+                status="ignored",
+                action_taken="ignored",
+                reason="Sender is not trusted",
+                validation_results=json.dumps(checks),
+                validation_decision="ignored",
+            )
+            return "untrusted_sender"
+
+        alert_label = f"Alert #{alert_id}" if alert_id else "Alert"
         logger.info(
-            "Email received: uid=%s subject=%r from=%r", uid, subject, from_header
+            "Trusted alert received | Alert ID: %s",
+            alert_id if alert_id else "pending",
+            extra={"category": "Alert Processing"},
         )
 
-        if not _is_from_trusted_sender(from_header, self._config.trusted_sender):
-            logger.info(
-                "uid=%s: ignoring -- sender %r is not trusted", uid, from_header
-            )
-            database.record_alert(
-                subject=subject, sender=from_header, status="ignored",
-                action_taken="ignored", reason="Sender is not trusted",
-            )
-            return
-
-        html = _extract_html(raw)
         if not html:
-            logger.warning("uid=%s: no readable body -- skipping", uid)
-            database.record_alert(
-                subject=subject, sender=from_header, status="ignored",
-                action_taken="ignored", reason="No readable message body",
+            logger.warning(
+                "%s could not be processed | No readable message body",
+                alert_label,
+                extra={"category": "Alert Processing"},
             )
-            return
+            _save_result(
+                "partial_parse",
+                status="ignored",
+                action_taken="ignored",
+                reason="No readable message body",
+                validation_results=json.dumps(checks),
+                validation_decision="ignored",
+            )
+            return "partial_parse"
 
-        classification = _extract_classification(html)
         matched_keyword = _find_matching_keyword(
             html, subject, self._config.alert_keywords
         )
+        checks.append(_vcheck(
+            "Alert classification check", classification is not None,
+            f"classification={classification!r}" if classification is not None
+            else "No Classification cell found in alert body",
+        ))
+        checks.append(_vcheck(
+            "Keyword match result", matched_keyword is not None,
+            f"matched keyword {matched_keyword!r}" if matched_keyword
+            else f"none of {sorted(self._config.alert_keywords)} matched",
+        ))
         if matched_keyword is None:
             logger.info(
-                "uid=%s: ignoring -- classification=%r does not match "
-                "ALERT_KEYWORDS (%s)",
-                uid,
-                classification or "<not found>",
-                ", ".join(sorted(self._config.alert_keywords)),
+                "%s ignored | No configured keyword matched",
+                alert_label,
+                extra={"category": "Alert Processing"},
             )
-            database.record_alert(
-                subject=subject, sender=from_header,
-                classification=classification or "",
-                status="ignored", action_taken="ignored",
+            _save_result(
+                "no_keyword_match",
+                status="ignored",
+                action_taken="ignored",
                 reason="Classification does not match configured alert keywords",
+                validation_results=json.dumps(checks),
+                validation_decision="ignored",
             )
-            return
-
-        logger.info(
-            "uid=%s: alert keyword %r matched (classification=%r) "
-            "-- proceeding with IP extraction",
-            uid, matched_keyword, classification or "<not found>",
-        )
+            return "no_keyword_match"
 
         origin_ip = _extract_origin_ip_from_html(html)
-        if not origin_ip:
+        try:
+            parsed_ip = ipaddress.ip_address(origin_ip) if origin_ip else None
+            valid_ip = bool(parsed_ip and parsed_ip.version == 4)
+        except ValueError:
+            parsed_ip = None
+            valid_ip = False
+        checks.append(_vcheck(
+            "IP format valid", valid_ip,
+            f"extracted {origin_ip}" if valid_ip
+            else "no valid IPv4 address found in alert body",
+        ))
+        if not valid_ip:
             logger.warning(
-                "uid=%s: could not extract Origin IP from alert -- skipping", uid
+                "%s rejected | Invalid or missing origin IP",
+                alert_label,
+                extra={"category": "Alert Processing"},
             )
-            database.record_alert(
-                subject=subject, sender=from_header,
-                classification=classification or "",
-                status="processed", action_taken="failed",
-                reason="Could not extract Origin IP from alert body",
+            _save_result(
+                "invalid_ip",
+                origin_ip=origin_ip or "",
+                status="processed",
+                action_taken="failed",
+                reason="Could not extract a valid Origin IP from alert body",
+                validation_results=json.dumps(checks),
+                validation_decision="failed_validation",
             )
-            return
+            return "invalid_ip"
 
-        logger.info("uid=%s: Origin IP extracted: %s", uid, origin_ip)
+        origin_ip = str(parsed_ip)
+        identity_kwargs["origin_ip"] = origin_ip
+        logger.info(
+            "Alert matched | Keyword: %s | IP: %s",
+            matched_keyword,
+            origin_ip,
+            extra={"category": "Alert Processing"},
+        )
+        logger.info(
+            "IP validation passed | IP: %s",
+            origin_ip,
+            extra={"category": "Alert Processing"},
+        )
+        is_public = not parsed_ip.is_private
+        checks.append(_vcheck(
+            "Public IP check", is_public,
+            "Origin IP is publicly routable" if is_public
+            else "Origin IP is in a private/reserved range (informational only)",
+        ))
+        allowed_set = load_allowed_ips(self._config.allowed_ips_file)
+        is_allowlisted = is_ip_allowed(origin_ip, allowed_set)
+        checks.append(_vcheck(
+            "Allowlist check", not is_allowlisted,
+            f"{origin_ip} is on the allow list" if is_allowlisted
+            else f"{origin_ip} is not on the allow list",
+        ))
+        blocked_row = database.get_blocked_ip(origin_ip)
+        locally_blocked = bool(
+            blocked_row and blocked_row.get("status") == "blocked"
+        )
+        checks.append(_vcheck(
+            "Local block history check", not locally_blocked,
+            "IP is recorded as currently blocked locally" if locally_blocked
+            else "IP is not recorded as currently blocked locally",
+        ))
 
         try:
-            result = block_ip(origin_ip, self._config)
+            if processing_source == "startup_catchup":
+                result = block_ip(
+                    origin_ip,
+                    self._config,
+                    source="startup_catchup",
+                    alert_id=alert_id,
+                )
+            else:
+                # Preserve the established live-monitor call contract.
+                result = block_ip(origin_ip, self._config)
         except RuleUpdateError as exc:
-            logger.error("Failed to block %s: %s", origin_ip, exc)
+            safe_reason = firewall_exception_message(exc)
+            logger.error(
+                "Failed to block %s | Reason: %s",
+                origin_ip,
+                safe_reason,
+                extra={"category": "Firewall Action"},
+            )
+            logger.debug(
+                "Full firewall block exception",
+                exc_info=True,
+                extra={"technical": True},
+            )
             notified = _notify(
                 self._config,
                 subject=f"[ALERT] Failed to block {origin_ip}",
                 body=(
                     f"Firewall rule update FAILED for IP {origin_ip}.\n\n"
-                    f"Error: {exc}\n\nOriginating alert: {subject}"
+                    f"Error: {safe_reason}\n\nOriginating alert: {subject}"
                 ),
             )
-            database.record_alert(
-                subject=subject, sender=from_header, origin_ip=origin_ip,
-                classification=classification or "",
-                status="processed", action_taken="failed",
-                reason=str(exc), notification_sent=notified,
+            checks.append(_vcheck(
+                "Duplicate check", True,
+                "not evaluated -- firewall call failed", skipped=True,
+            ))
+            _save_result(
+                "processing_failed",
+                status="processed",
+                action_taken="failed",
+                reason=safe_reason,
+                notification_sent=notified,
+                validation_results=json.dumps(checks),
+                validation_decision="approved",
             )
-            database.reserve_pending_block(origin_ip, str(exc))
-            return
+            database.reserve_pending_block(
+                origin_ip, safe_reason, alarm_id=alarm_id or None, alert_id=alert_id
+            )
+            database.record_retry_history(
+                origin_ip, attempt_number=1, status="failure", error=safe_reason,
+                alert_id=alert_id,
+                source="startup_catchup" if processing_source == "startup_catchup" else "automatic",
+            )
+            logger.warning(
+                "Retry scheduled | IP: %s | Attempt: 1",
+                origin_ip,
+                extra={"category": "Retry Queue"},
+            )
+            return "processing_failed"
 
         if result == "allowed":
-            logger.info("IP %s is whitelisted -- no action taken", origin_ip)
-            database.record_alert(
-                subject=subject, sender=from_header, origin_ip=origin_ip,
-                classification=classification or "",
-                status="processed", action_taken="allowed",
+            logger.info(
+                "IP %s is allowlisted | No firewall action required",
+                origin_ip,
+                extra={"category": "Firewall Action"},
+            )
+            _save_result(
+                "allowlisted",
+                status="processed",
+                action_taken="allowed",
                 reason="Origin IP is on the allow list",
+                validation_results=json.dumps(checks),
+                validation_decision="rejected",
             )
-        elif result == "duplicate":
+            return "allowlisted"
+        if result == "duplicate":
             logger.info(
-                "IP %s already blocked in rule %r -- no update sent",
-                origin_ip, self._config.firewall_rule_name,
+                "IP %s is already blocked",
+                origin_ip,
+                extra={"category": "Firewall Action"},
             )
-            database.record_alert(
-                subject=subject, sender=from_header, origin_ip=origin_ip,
-                classification=classification or "",
-                status="processed", action_taken="duplicate",
+            checks.append(_vcheck(
+                "Duplicate check", False,
+                "Origin IP already present in firewall rule",
+            ))
+            _save_result(
+                "already_blocked",
+                status="processed",
+                action_taken="duplicate",
                 reason="Origin IP already present in firewall rule",
+                validation_results=json.dumps(checks),
+                validation_decision="approved",
             )
-        elif result == "blocked":
-            logger.info(
-                "IP %s successfully added to rule %r",
-                origin_ip, self._config.firewall_rule_name,
+            return "already_blocked"
+
+        checks.append(_vcheck(
+            "Duplicate check", True, "Origin IP was not already present"
+        ))
+        logger.info(
+            "Blocking IP %s",
+            origin_ip,
+            extra={"category": "Firewall Action"},
+        )
+        logger.log(
+            SUCCESS,
+            "IP %s blocked successfully",
+            origin_ip,
+            extra={"category": "Firewall Action"},
+        )
+        notified = _notify(
+            self._config,
+            subject=f"[BLOCKED] {origin_ip} added to firewall rule",
+            body=(
+                f"IP {origin_ip} has been appended to the firewall rule "
+                f"'{self._config.firewall_rule_name}' and will be rejected.\n\n"
+                f"Originating alert: {subject}"
+            ),
+        )
+        _save_result(
+            "blocked_successfully",
+            status="processed",
+            action_taken="blocked",
+            reason="Origin IP appended to firewall rule",
+            notification_sent=notified,
+            validation_results=json.dumps(checks),
+            validation_decision="approved",
+        )
+        return "blocked_successfully"
+
+    def run_startup_catchup(self) -> dict[str, int]:
+        """Run one bounded, status-aware historical scan before live polling."""
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            hours=self._config.email_lookback_hours
+        )
+        summary = {"fetched": 0, "processed": 0, "skipped": 0, "failed": 0}
+        mailbox = ImapMailbox(self._config)
+        try:
+            mailbox.connect()
+            messages = mailbox.fetch_recent(
+                cutoff,
+                self._config.trusted_senders,
+                self._config.email_lookback_max_messages,
             )
-            notified = _notify(
-                self._config,
-                subject=f"[BLOCKED] {origin_ip} added to firewall rule",
-                body=(
-                    f"IP {origin_ip} has been appended to the firewall rule "
-                    f"'{self._config.firewall_rule_name}' and will be rejected.\n\n"
-                    f"Originating alert: {subject}"
-                ),
+            summary["fetched"] = len(messages)
+        except EmailConnectionError as exc:
+            logger.warning(
+                "Startup catch-up unavailable | Email service connection failed",
+                extra={"category": "Email Service"},
             )
-            database.record_alert(
-                subject=subject, sender=from_header, origin_ip=origin_ip,
-                classification=classification or "",
-                status="processed", action_taken="blocked",
-                reason="Origin IP appended to firewall rule",
-                notification_sent=notified,
+            logger.debug("Catch-up IMAP error: %s", exc, extra={"technical": True})
+            mailbox.disconnect()
+            return summary
+        except Exception as exc:
+            logger.error(
+                "Startup catch-up failed while retrieving email",
+                extra={"category": "Email Service"},
             )
+            logger.exception(
+                "Technical catch-up retrieval failure: %s",
+                exc,
+                extra={"technical": True},
+            )
+            mailbox.disconnect()
+            return summary
+
+        seen_identities: set[str] = set()
+        try:
+            for message in messages:
+                uid, raw = message[0], message[1]
+                internal_received = message[2] if len(message) > 2 else None
+                headers = _parse_headers(raw)
+                message_id = _normalize_message_id(headers.get("message_id", ""))
+                identity = f"message-id:{message_id}" if message_id else f"uid:{uid}"
+                received_dt = internal_received or _received_datetime(
+                    headers.get("date", "")
+                )
+                if received_dt and received_dt < cutoff:
+                    logger.debug(
+                        "Catch-up skipped uid=%s outside exact lookback cutoff", uid
+                    )
+                    summary["skipped"] += 1
+                    continue
+                if identity in seen_identities:
+                    logger.debug("Catch-up skipped duplicate %s", identity)
+                    summary["skipped"] += 1
+                    continue
+                seen_identities.add(identity)
+
+                html = _extract_html(raw)
+                origin_ip = _extract_origin_ip_from_html(html or "") or ""
+                try:
+                    result = self._process_message(
+                        uid,
+                        raw,
+                        processing_source="startup_catchup",
+                        received_at=received_dt.isoformat() if received_dt else None,
+                    )
+                except Exception as exc:
+                    summary["failed"] += 1
+                    failed_alert = database.find_alert_by_message_identity(
+                        message_id, uid
+                    )
+                    if failed_alert:
+                        database.update_alert(
+                            failed_alert["id"],
+                            processing_status="processing_failed",
+                            status="processed",
+                            action_taken="failed",
+                            reason=str(exc),
+                            processing_source="startup_catchup",
+                        )
+                    logger.error(
+                        "Startup catch-up failed for historical alert | IP: %s",
+                        origin_ip or "unknown",
+                        extra={"category": "Alert Processing"},
+                    )
+                    logger.exception(
+                        "Catch-up technical failure | Message-ID=%s UID=%s IP=%s error=%s",
+                        message_id or "<missing>", uid, origin_ip or "<unknown>", exc,
+                        extra={"technical": True},
+                    )
+                    continue
+                if result.startswith("skipped:"):
+                    summary["skipped"] += 1
+                    continue
+                summary["processed"] += 1
+                processed_alert = database.find_alert_by_message_identity(
+                    message_id, uid
+                )
+                label = (
+                    f"Alert #{processed_alert['id']}" if processed_alert else "Alert"
+                )
+                logger.info(
+                    "%s processed through startup catch-up scan | Result: %s",
+                    label,
+                    result,
+                    extra={"category": "Alert Processing"},
+                )
+        finally:
+            mailbox.disconnect()
+
+        logger.info(
+            "Startup catch-up completed | Checked: %d | Processed: %d | Skipped: %d | Failed: %d",
+            summary["fetched"],
+            summary["processed"],
+            summary["skipped"],
+            summary["failed"],
+            extra={"category": "Application"},
+        )
+        return summary
 
     def _retry_pending_blocks(self) -> None:
         """Retry every IP reserved after a prior failed block attempt.
@@ -340,26 +901,62 @@ class EmailMonitor:
             logger.info(
                 "Recovered %d historical failed block(s) into the retry queue",
                 recovered,
+                extra={"category": "Retry Queue"},
             )
         pending = database.list_pending_blocks()
         if not pending:
             return
-        logger.info("Retrying %d pending firewall block(s)", len(pending))
+        logger.debug("Retry worker found %d pending block(s)", len(pending))
         for entry in pending:
             ip = entry["ip"]
+            alert_id = entry.get("alert_id")
+            attempt_number = entry["attempts"] + 1
+            database.mark_retrying(ip)
             try:
-                result = block_ip(ip, self._config)
+                result = block_ip(ip, self._config, alert_id=alert_id)
             except RuleUpdateError as exc:
+                safe_reason = firewall_exception_message(exc)
                 logger.error(
-                    "Retry failed for %s (attempt %d): %s",
-                    ip, entry["attempts"] + 1, exc,
+                    "Firewall retry failed | IP: %s | Attempt: %d | Reason: %s",
+                    ip, attempt_number, safe_reason,
+                    extra={"category": "Retry Queue"},
                 )
-                database.reserve_pending_block(ip, str(exc))
+                logger.debug(
+                    "Full firewall retry exception",
+                    exc_info=True,
+                    extra={"technical": True},
+                )
+                # Update-only: if an administrator removed this IP from the
+                # queue while this retry was in flight, this is a no-op
+                # rather than resurrecting the cancelled entry.
+                database.record_retry_attempt(ip, safe_reason)
+                database.record_retry_history(
+                    ip, attempt_number=attempt_number, status="failure",
+                    error=safe_reason, alert_id=alert_id, source="automatic",
+                )
+                next_attempt = (
+                    datetime.now().astimezone()
+                    + timedelta(seconds=self._config.poll_interval)
+                ).strftime("%I:%M %p")
+                logger.warning(
+                    "Retry scheduled | IP: %s | Next attempt: %s",
+                    ip,
+                    next_attempt,
+                    extra={"category": "Retry Queue"},
+                )
                 continue
+            finally:
+                database.clear_retrying(ip)
 
-            logger.info(
-                "Retry succeeded for %s -- result=%r (attempt %d)",
-                ip, result, entry["attempts"] + 1,
+            logger.log(
+                SUCCESS,
+                "Retry succeeded | IP: %s | Result: %s | Attempt: %d",
+                ip, result, attempt_number,
+                extra={"category": "Retry Queue"},
+            )
+            database.record_retry_history(
+                ip, attempt_number=attempt_number, status="success",
+                alert_id=alert_id, source="automatic",
             )
             notified = False
             if result == "blocked":
@@ -370,49 +967,176 @@ class EmailMonitor:
                         f"IP {ip} previously failed to block but has now been "
                         f"successfully appended to the firewall rule "
                         f"'{self._config.firewall_rule_name}' after "
-                        f"{entry['attempts'] + 1} attempt(s)."
+                        f"{attempt_number} attempt(s)."
                     ),
                 )
             database.resolve_pending_block(ip, result, notified=notified)
 
+    def _poll_folder(self, mailbox: ImapMailbox, folder: str) -> int:
+        """Fetch, durably store, then process new UIDs from one folder."""
+        state = mailbox.select_folder(folder)
+        checkpoint = database.get_uid_checkpoint(self._imap_account, folder)
+        volatile_key = (folder, state.uidvalidity)
+        if checkpoint is None and volatile_key in self._volatile_uid_checkpoints:
+            checkpoint = {
+                "uidvalidity": state.uidvalidity,
+                "last_fetched_uid": self._volatile_uid_checkpoints[volatile_key],
+            }
+
+        validity_changed = bool(
+            checkpoint and str(checkpoint.get("uidvalidity", "")) != state.uidvalidity
+        )
+        if checkpoint is None or validity_changed:
+            database.reset_uid_checkpoint(
+                self._imap_account, folder, state.uidvalidity
+            )
+            last_uid = 0
+            if validity_changed:
+                logger.warning(
+                    "UID checkpoint reset safely | Folder: %s",
+                    folder,
+                    extra={"category": "Email Service"},
+                )
+        else:
+            last_uid = int(checkpoint.get("last_fetched_uid") or 0)
+
+        reconcile = self._needs_uid_reconciliation or validity_changed or checkpoint is None
+        first_uid = (
+            max(1, last_uid - self._config.imap_uid_reconcile_count + 1)
+            if reconcile and last_uid
+            else max(1, last_uid + 1)
+        )
+        uids = mailbox.search_uids_since(first_uid)
+        if reconcile and not last_uid:
+            uids = uids[-self._config.imap_uid_reconcile_count:]
+        elif not reconcile:
+            # Some IMAP servers treat ``333:*`` as the reversed inclusive
+            # range ``332:333`` when 332 is currently the highest UID. Never
+            # trust the server-side range alone: normal polling must accept
+            # only UIDs strictly newer than the durable checkpoint.
+            uids = [uid for uid in uids if int(uid) > last_uid]
+
+        newly_stored = 0
+        for uid in uids:
+            raw = mailbox.fetch_message_peek(uid)
+            stored_email_id, inserted = database.store_fetched_email(
+                self._imap_account,
+                folder,
+                state.uidvalidity,
+                uid,
+                raw,
+            )
+            # The checkpoint moves only after the raw bytes are durable.
+            database.advance_uid_checkpoint(
+                self._imap_account,
+                folder,
+                state.uidvalidity,
+                int(uid),
+            )
+            self._volatile_uid_checkpoints[volatile_key] = max(
+                int(uid), self._volatile_uid_checkpoints.get(volatile_key, 0)
+            )
+            if inserted:
+                newly_stored += 1
+            try:
+                self._process_message(
+                    uid,
+                    raw,
+                    imap_account=self._imap_account,
+                    imap_folder=folder,
+                    imap_uidvalidity=state.uidvalidity,
+                    stored_email_id=stored_email_id,
+                )
+            except Exception as exc:
+                database.update_stored_email(
+                    stored_email_id, processing_status="processing_failed"
+                )
+                logger.error(
+                    "Stored alert processing failed | Folder: %s",
+                    folder,
+                    extra={"category": "Alert Processing"},
+                )
+                logger.debug(
+                    "Stored email processing failure | folder=%r uid=%s",
+                    folder,
+                    uid,
+                    exc_info=True,
+                    extra={"technical": True},
+                )
+                continue
+        return newly_stored
+
     def run_once(self) -> int:
-        """Execute one IMAP polling cycle."""
+        """Execute one folder-aware, UID-checkpointed IMAP polling cycle."""
         self._retry_pending_blocks()
         mailbox = ImapMailbox(self._config)
-        mailbox.connect()
         try:
-            messages = mailbox.fetch_unread()
-            for uid, raw in messages:
-                try:
-                    self._process_message(uid, raw)
-                except Exception as exc:
-                    logger.exception(
-                        "Unexpected error processing uid=%s: %s", uid, exc
-                    )
-                finally:
-                    mailbox.mark_seen(uid)
-            return len(messages)
-        finally:
-            mailbox.disconnect()
+            mailbox.connect()
+            try:
+                fetched = sum(
+                    self._poll_folder(mailbox, folder)
+                    for folder in self._config.imap_folders
+                )
+            finally:
+                mailbox.disconnect()
+            if self._imap_connected is False:
+                logger.info(
+                    "IMAP connection restored",
+                    extra={"category": "Email Service"},
+                )
+            self._imap_connected = True
+            self._needs_uid_reconciliation = False
+            if fetched:
+                logger.info(
+                    "IMAP poll completed | Status: connected | New emails found: %d",
+                    fetched,
+                    extra={"category": "Email Service"},
+                )
+            else:
+                logger.info(
+                    "IMAP poll completed | Status: connected | No new emails",
+                    extra={"category": "Email Service"},
+                )
+            return fetched
+        except EmailConnectionError as exc:
+            if self._imap_connected is not False:
+                logger.warning(
+                    "IMAP connection lost",
+                    extra={"category": "Email Service"},
+                )
+            self._imap_connected = False
+            self._needs_uid_reconciliation = True
+            logger.debug(
+                "IMAP polling failure",
+                exc_info=True,
+                extra={"technical": True},
+            )
+            raise
 
     def run_forever(self) -> None:
         """Poll IMAP indefinitely."""
         logger.info(
-            "Email monitor started | imap=%s:%s smtp=%s:%s interval=%ds",
-            self._config.imap_host,
-            self._config.imap_port,
-            self._config.smtp_host,
-            self._config.smtp_port,
+            "Email monitoring started",
+            extra={"category": "Email Service"},
+        )
+        logger.debug(
+            "Email monitor endpoints | imap=%s:%s smtp=%s:%s interval=%ds",
+            self._config.imap_host, self._config.imap_port,
+            self._config.smtp_host, self._config.smtp_port,
             self._config.poll_interval,
+            extra={"technical": True},
         )
         while True:
             try:
-                count = self.run_once()
-                logger.info("Cycle complete -- %d message(s) processed", count)
+                self.run_once()
             except EmailConnectionError as exc:
-                logger.error("IMAP error during polling cycle: %s", exc)
+                logger.debug("IMAP polling error: %s", exc, extra={"technical": True})
             except Exception as exc:
-                logger.exception("Error during polling cycle: %s", exc)
+                logger.exception(
+                    "Technical polling-cycle failure: %s",
+                    exc,
+                    extra={"technical": True},
+                )
             time.sleep(self._config.poll_interval)
 
     def start(self) -> None:
@@ -421,4 +1145,8 @@ class EmailMonitor:
             self.run_forever()
         else:
             count = self.run_once()
-            logger.info("Single-cycle complete -- %d message(s) processed", count)
+            logger.info(
+                "Single email scan completed | Processed: %d",
+                count,
+                extra={"category": "Email Service"},
+            )

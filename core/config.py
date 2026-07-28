@@ -29,9 +29,10 @@ _REQUIRED: tuple[str, ...] = (
     "SMTP_HOST",
     "SMTP_PORT",
     "NOTIFICATION_EMAIL",
-    "TRUSTED_SENDER",
     "ALERT_KEYWORDS",
 )
+# TRUSTED_SENDERS is required too, but handled separately in load_config()
+# since either it or the legacy singular TRUSTED_SENDER satisfies it.
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -69,7 +70,7 @@ class AppConfig:
     notification_email: str
 
     # Alert filtering
-    trusted_sender: str
+    trusted_senders: FrozenSet[str]
     alert_keywords: FrozenSet[str]
 
     # Paths / behaviour
@@ -78,8 +79,14 @@ class AppConfig:
     log_level: str
     poll_interval: int
     run_loop: bool
+    debug_logging: bool = False
+    debug_log_max_chars: int = 2000
     database_path: str = "data/app.db"
     firewall_ping_interval: int = 60
+    email_lookback_hours: int = 24
+    email_lookback_max_messages: int = 200
+    imap_folders: tuple[str, ...] = ("INBOX",)
+    imap_uid_reconcile_count: int = 20
 
     # Dashboard
     dashboard_host: str = "127.0.0.1"
@@ -91,6 +98,15 @@ class AppConfig:
 
 def _env_bool(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_positive_int_or_default(name: str, default: int) -> int:
+    """Return a positive integer setting, falling back safely when invalid."""
+    try:
+        value = int(os.environ.get(name, str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _validate_port(name: str, raw: str) -> int:
@@ -114,6 +130,45 @@ def _validate_email(name: str, raw: str) -> str:
     return value
 
 
+def parse_trusted_senders(raw: str, *, required: bool = True) -> FrozenSet[str]:
+    """Parse a comma-separated TRUSTED_SENDERS value into a trimmed, lowercased set.
+
+    Each entry is trimmed and validated as an email address; comparison
+    against incoming mail is case-insensitive, so entries are normalized to
+    lowercase here once rather than on every message.
+
+    Parameters
+    ----------
+    required:
+        When True (startup/env loading), an empty result raises. When False
+        (settings-page validation of a not-yet-saved value), an empty/blank
+        *raw* is allowed and simply returns an empty set -- callers there
+        treat "blank" as "leave the existing value unchanged".
+
+    Raises
+    ------
+    EnvironmentError
+        If *required* and no entries are present, or if any entry is not a
+        valid email address.
+    """
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not entries:
+        if required:
+            raise EnvironmentError(
+                "TRUSTED_SENDERS must contain at least one comma-separated "
+                "email address (e.g. soc@company.com, alerts@company.com)"
+            )
+        return frozenset()
+
+    invalid = [e for e in entries if not _EMAIL_RE.match(e)]
+    if invalid:
+        raise EnvironmentError(
+            "TRUSTED_SENDERS contains invalid email address(es): "
+            + ", ".join(repr(e) for e in invalid)
+        )
+    return frozenset(e.lower() for e in entries)
+
+
 def _validate_non_empty(name: str, raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -132,6 +187,13 @@ def load_config() -> AppConfig:
     load_dotenv()
 
     missing = [k for k in _REQUIRED if not os.environ.get(k, "").strip()]
+    # TRUSTED_SENDERS is the canonical var; the legacy singular
+    # TRUSTED_SENDER is still accepted for backward compatibility with
+    # existing .env files -- either one satisfies the requirement.
+    trusted_senders_raw = os.environ.get("TRUSTED_SENDERS", "").strip()
+    legacy_trusted_sender_raw = os.environ.get("TRUSTED_SENDER", "").strip()
+    if not trusted_senders_raw and not legacy_trusted_sender_raw:
+        missing.append("TRUSTED_SENDERS")
     if missing:
         raise EnvironmentError(
             "Missing required environment variables: "
@@ -146,7 +208,7 @@ def load_config() -> AppConfig:
     notification_email = _validate_email(
         "NOTIFICATION_EMAIL", os.environ["NOTIFICATION_EMAIL"]
     )
-    trusted_sender = _validate_email("TRUSTED_SENDER", os.environ["TRUSTED_SENDER"]).lower()
+    trusted_senders = parse_trusted_senders(trusted_senders_raw or legacy_trusted_sender_raw)
 
     smtp_username = os.environ.get("SMTP_USERNAME", "").strip() or email_username
     smtp_password = os.environ.get("SMTP_PASSWORD", "").strip() or os.environ["EMAIL_PASSWORD"]
@@ -195,6 +257,15 @@ def load_config() -> AppConfig:
             f"(e.g. attack,threat,malicious); got {keywords_raw!r}"
         )
 
+    legacy_mailbox = os.environ.get("IMAP_MAILBOX", "INBOX").strip() or "INBOX"
+    folders_raw = os.environ.get("IMAP_FOLDERS", "").strip()
+    imap_folders = tuple(
+        dict.fromkeys(
+            folder.strip() for folder in (folders_raw or legacy_mailbox).split(",")
+            if folder.strip()
+        )
+    ) or ("INBOX",)
+
     return AppConfig(
         firewall_host=_validate_non_empty("FIREWALL_HOST", os.environ["FIREWALL_HOST"]),
         firewall_port=firewall_port,
@@ -204,11 +275,21 @@ def load_config() -> AppConfig:
             "FIREWALL_RULE_NAME", os.environ["FIREWALL_RULE_NAME"]
         ),
         firewall_ping_interval=firewall_ping_interval,
+        email_lookback_hours=_env_positive_int_or_default(
+            "EMAIL_LOOKBACK_HOURS", 24
+        ),
+        email_lookback_max_messages=_env_positive_int_or_default(
+            "EMAIL_LOOKBACK_MAX_MESSAGES", 200
+        ),
+        imap_uid_reconcile_count=_env_positive_int_or_default(
+            "IMAP_UID_RECONCILE_COUNT", 20
+        ),
+        imap_folders=imap_folders,
         imap_host=_validate_non_empty("IMAP_HOST", os.environ["IMAP_HOST"]),
         imap_port=imap_port,
         imap_use_ssl=imap_use_ssl,
         imap_use_starttls=imap_use_starttls,
-        imap_mailbox=os.environ.get("IMAP_MAILBOX", "INBOX").strip() or "INBOX",
+        imap_mailbox=imap_folders[0],
         imap_timeout=imap_timeout,
         email_username=email_username,
         email_password=os.environ["EMAIL_PASSWORD"],
@@ -221,13 +302,17 @@ def load_config() -> AppConfig:
         smtp_password=smtp_password,
         smtp_from_address=smtp_from,
         notification_email=notification_email,
-        trusted_sender=trusted_sender,
+        trusted_senders=trusted_senders,
         alert_keywords=keywords,
         allowed_ips_file=os.environ.get(
             "ALLOWED_IPS_FILE", "config/allowed_ips.txt"
         ).strip(),
         log_directory=os.environ.get("LOG_DIRECTORY", "logs").strip(),
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
+        debug_logging=_env_bool("DEBUG_LOGGING", "false"),
+        debug_log_max_chars=_env_positive_int_or_default(
+            "DEBUG_LOG_MAX_CHARS", 2000
+        ),
         poll_interval=poll_interval,
         run_loop=_env_bool("IMAP_RUN_LOOP", "true"),
         database_path=os.environ.get("DATABASE_PATH", "data/app.db").strip(),

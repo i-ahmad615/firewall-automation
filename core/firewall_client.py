@@ -19,9 +19,11 @@ import copy
 import requests
 import urllib3
 
+from .firewall_errors import firewall_exception_message
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-logger = logging.getLogger(__name__)
+logger = logging.LoggerAdapter(logging.getLogger(__name__), {"technical": True})
 
 # XML status codes returned by SFOS inside HTTP 200 responses
 _SUCCESS_CODES: frozenset[str] = frozenset({"200"})
@@ -132,7 +134,7 @@ class SophosClient:
 
     def _send(self, body: str, context: str = "") -> ET.Element:
         """POST *body* as ``reqxml`` form data and return the parsed XML root."""
-        logger.info("SFOS >> [%s] %.400s", context, _redact_credentials(body))
+        logger.debug("SFOS request [%s]: %s", context, _redact_credentials(body))
         resp = requests.post(
             self._base_url,
             data={"reqxml": body},
@@ -140,7 +142,7 @@ class SophosClient:
             timeout=self.timeout,
         )
         self._last_response = resp.text
-        logger.info("SFOS << [%s] %.600s", context, _redact_credentials(resp.text))
+        logger.debug("SFOS response [%s]: %s", context, _redact_credentials(resp.text))
         resp.raise_for_status()
         try:
             return ET.fromstring(resp.text)
@@ -206,11 +208,11 @@ class SophosClient:
         if token:
             self._token = token
             self._per_request = False
-            logger.info("SFOS auth OK -- session token acquired")
+            logger.debug("SFOS authentication succeeded using a session token")
         else:
             self._token = None
             self._per_request = True
-            logger.info("SFOS auth OK -- credentials-per-request mode (SFOS 22)")
+            logger.debug("SFOS authentication succeeded using per-request credentials")
         self._authenticated = True
 
     def create_ip_host(self, name: str, ip: str) -> None:
@@ -251,7 +253,55 @@ class SophosClient:
             _redact_credentials(self._last_response),
         )
         self._check_write_status(root, f"create_ip_host({name!r})")
-        logger.info("IP host %r (%s) confirmed on SFOS", name, ip)
+        logger.debug("IP host %r (%s) confirmed on SFOS", name, ip)
+
+    def ip_host_exists(self, name: str, ip: str = "") -> bool:
+        """Return whether the named IP Host already exists on SFOS.
+
+        When *ip* is supplied, the host must also contain that exact address.
+        This read-before-create check keeps catch-up and live processing
+        idempotent without relying solely on SFOS's tolerated 502 response.
+        """
+        self._ensure_auth()
+        payload = f"<Get><IPHost><Name>{name}</Name></IPHost></Get>"
+        root = self._send(
+            self._build_request(payload),
+            f"get_ip_host({name!r})",
+        )
+        for host in root.findall(".//IPHost"):
+            found_name = (host.findtext("Name") or "").strip()
+            found_ip = (host.findtext("IPAddress") or "").strip()
+            if found_name == name and (not ip or found_ip == ip):
+                return True
+        return False
+
+    def delete_ip_host(self, name: str) -> None:
+        """Delete an IP Host object from SFOS.
+
+        Best-effort from the caller's perspective: SFOS rejects deleting a
+        host object that is still referenced by another rule, which surfaces
+        here as a :class:`FirewallAPIError` like any other write failure --
+        callers that only want "best effort cleanup, leave it if still in
+        use elsewhere" semantics (see ``rule_updater.unblock_ip``) should
+        catch that exception themselves rather than treating it as fatal.
+
+        Parameters
+        ----------
+        name:
+            SFOS object name, e.g. ``"blocked-69-5-169-189"``.
+        """
+        self._ensure_auth()
+        payload = (
+            "<Remove>"
+            "<IPHost>"
+            f"<Name>{name}</Name>"
+            "</IPHost>"
+            "</Remove>"
+        )
+        xml_body = self._build_request(payload)
+        root = self._send(xml_body, f"delete_ip_host({name!r})")
+        self._check_write_status(root, f"delete_ip_host({name!r})")
+        logger.debug("IP host %r deleted from SFOS", name)
 
     def get_firewall_rule(self, rule_name: str) -> ET.Element:
         """Fetch the named firewall rule from SFOS.
@@ -264,7 +314,7 @@ class SophosClient:
         """
         self._ensure_auth()
         payload = f"<Get><FirewallRule><Name>{rule_name}</Name></FirewallRule></Get>"
-        logger.info("Fetching firewall rule %r", rule_name)
+        logger.debug("Fetching firewall rule %r", rule_name)
         return self._send(
             self._build_request(payload),
             f"get_rule({rule_name!r})",
@@ -286,8 +336,8 @@ class SophosClient:
         rule_xml = ET.tostring(rule_copy, encoding="unicode")
         payload = f'<Set operation="update">{rule_xml}</Set>'
         body = self._build_request(payload)
-        logger.info("Uploading updated rule %r to firewall", rule_name)
-        logger.info("DEBUG set_rule payload XML: %s", rule_xml)
+        logger.debug("Uploading updated rule %r to firewall", rule_name)
+        logger.debug("Firewall rule update payload: %s", rule_xml)
         root = self._send(body, f"set_rule({rule_name!r})")
         self._check_write_status(root, f"set_rule({rule_name!r})")
         return root
@@ -333,11 +383,14 @@ def ping(
         client.authenticate()
         return True, ""
     except FirewallAPIError as exc:
-        return False, str(exc)
+        logger.debug("Full firewall ping exception", exc_info=True)
+        return False, firewall_exception_message(exc, timeout)
     except requests.RequestException as exc:
-        return False, str(exc)
+        logger.debug("Full firewall ping exception", exc_info=True)
+        return False, firewall_exception_message(exc, timeout)
     except Exception as exc:  # pragma: no cover -- defensive catch-all
-        return False, str(exc)
+        logger.debug("Full firewall ping exception", exc_info=True)
+        return False, firewall_exception_message(exc, timeout)
     finally:
         try:
             client.logout()

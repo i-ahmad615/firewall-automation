@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import pytest
 
-from core.config import load_allowed_ips, is_ip_allowed, load_config
+from core.config import load_allowed_ips, is_ip_allowed, load_config, parse_trusted_senders
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -27,7 +27,7 @@ _FULL_ENV: dict[str, str] = {
     "SMTP_HOST": "smtp.office365.com",
     "SMTP_PORT": "587",
     "NOTIFICATION_EMAIL": "security-alerts@example.com",
-    "TRUSTED_SENDER": "alerts@company.com",
+    "TRUSTED_SENDERS": "alerts@company.com",
     "ALERT_KEYWORDS": "attack",
 }
 
@@ -107,6 +107,7 @@ class TestLoadConfig:
     ) -> None:
         for key in _FULL_ENV:
             monkeypatch.delenv(key, raising=False)
+        monkeypatch.delenv("TRUSTED_SENDER", raising=False)  # legacy alias
         with pytest.raises(EnvironmentError, match="Missing required"):
             load_config()
 
@@ -126,15 +127,76 @@ class TestLoadConfig:
         assert cfg.firewall_host == "192.168.1.1"
         assert cfg.firewall_port == 4444
         assert cfg.firewall_rule_name == "Block IP"
-        assert cfg.trusted_sender == "alerts@company.com"
+        assert cfg.trusted_senders == frozenset({"alerts@company.com"})
 
-    def test_trusted_sender_lowercased(
+    def test_trusted_senders_lowercased(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _set_full_env(monkeypatch)
-        monkeypatch.setenv("TRUSTED_SENDER", "ALERTS@COMPANY.COM")
+        monkeypatch.setenv("TRUSTED_SENDERS", "ALERTS@COMPANY.COM")
         cfg = load_config()
-        assert cfg.trusted_sender == "alerts@company.com"
+        assert cfg.trusted_senders == frozenset({"alerts@company.com"})
+
+    def test_trusted_senders_multiple_comma_separated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv(
+            "TRUSTED_SENDERS", "soc@company.com,alerts@company.com,ops@company.com"
+        )
+        cfg = load_config()
+        assert cfg.trusted_senders == frozenset(
+            {"soc@company.com", "alerts@company.com", "ops@company.com"}
+        )
+
+    def test_trusted_senders_whitespace_trimmed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv(
+            "TRUSTED_SENDERS", "  soc@company.com , alerts@company.com  ,ops@company.com "
+        )
+        cfg = load_config()
+        assert cfg.trusted_senders == frozenset(
+            {"soc@company.com", "alerts@company.com", "ops@company.com"}
+        )
+
+    def test_trusted_senders_invalid_entry_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("TRUSTED_SENDERS", "soc@company.com,not-an-email")
+        with pytest.raises(EnvironmentError, match="TRUSTED_SENDERS"):
+            load_config()
+
+    def test_trusted_senders_blank_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("TRUSTED_SENDERS", "")
+        monkeypatch.delenv("TRUSTED_SENDER", raising=False)
+        with pytest.raises(EnvironmentError, match="TRUSTED_SENDERS"):
+            load_config()
+
+    def test_legacy_trusted_sender_singular_still_works(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Backward compatibility: an existing .env with only the old
+        singular TRUSTED_SENDER (no TRUSTED_SENDERS) must keep working."""
+        _set_full_env(monkeypatch)
+        monkeypatch.delenv("TRUSTED_SENDERS", raising=False)
+        monkeypatch.setenv("TRUSTED_SENDER", "legacy@company.com")
+        cfg = load_config()
+        assert cfg.trusted_senders == frozenset({"legacy@company.com"})
+
+    def test_trusted_senders_takes_precedence_over_legacy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("TRUSTED_SENDERS", "new@company.com")
+        monkeypatch.setenv("TRUSTED_SENDER", "legacy@company.com")
+        cfg = load_config()
+        assert cfg.trusted_senders == frozenset({"new@company.com"})
 
     def test_alert_keywords_parsed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -252,3 +314,91 @@ class TestLoadConfig:
         assert cfg.log_level == "DEBUG"
         assert cfg.poll_interval == 120
         assert cfg.run_loop is True
+
+    @pytest.mark.parametrize("raw", ["invalid", "0", "-5", ""])
+    def test_invalid_email_lookback_uses_safe_defaults(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("EMAIL_LOOKBACK_HOURS", raw)
+        monkeypatch.setenv("EMAIL_LOOKBACK_MAX_MESSAGES", raw)
+        cfg = load_config()
+        assert cfg.email_lookback_hours == 24
+        assert cfg.email_lookback_max_messages == 200
+
+    def test_debug_logging_defaults_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.delenv("DEBUG_LOGGING", raising=False)
+        monkeypatch.delenv("DEBUG_LOG_MAX_CHARS", raising=False)
+        cfg = load_config()
+        assert cfg.debug_logging is False
+        assert cfg.debug_log_max_chars == 2000
+
+    def test_debug_logging_configuration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("DEBUG_LOGGING", "true")
+        monkeypatch.setenv("DEBUG_LOG_MAX_CHARS", "750")
+        cfg = load_config()
+        assert cfg.debug_logging is True
+        assert cfg.debug_log_max_chars == 750
+
+    def test_imap_folders_and_reconcile_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("IMAP_FOLDERS", "INBOX, SOC Alerts,INBOX")
+        monkeypatch.setenv("IMAP_UID_RECONCILE_COUNT", "35")
+        cfg = load_config()
+        assert cfg.imap_folders == ("INBOX", "SOC Alerts")
+        assert cfg.imap_mailbox == "INBOX"
+        assert cfg.imap_uid_reconcile_count == 35
+
+    def test_invalid_reconcile_count_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv("IMAP_UID_RECONCILE_COUNT", "invalid")
+        cfg = load_config()
+        assert cfg.imap_uid_reconcile_count == 20
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# parse_trusted_senders
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestParseTrustedSenders:
+    def test_single_address(self) -> None:
+        assert parse_trusted_senders("alerts@company.com") == frozenset(
+            {"alerts@company.com"}
+        )
+
+    def test_multiple_addresses(self) -> None:
+        result = parse_trusted_senders("a@company.com,b@company.com")
+        assert result == frozenset({"a@company.com", "b@company.com"})
+
+    def test_trims_whitespace(self) -> None:
+        result = parse_trusted_senders(" a@company.com , b@company.com ")
+        assert result == frozenset({"a@company.com", "b@company.com"})
+
+    def test_lowercases(self) -> None:
+        result = parse_trusted_senders("Alerts@Company.COM")
+        assert result == frozenset({"alerts@company.com"})
+
+    def test_deduplicates_case_insensitively(self) -> None:
+        result = parse_trusted_senders("Alerts@Company.com,alerts@company.com")
+        assert result == frozenset({"alerts@company.com"})
+
+    def test_ignores_blank_entries_between_commas(self) -> None:
+        result = parse_trusted_senders("a@company.com,,b@company.com,")
+        assert result == frozenset({"a@company.com", "b@company.com"})
+
+    def test_empty_raises_when_required(self) -> None:
+        with pytest.raises(EnvironmentError, match="TRUSTED_SENDERS"):
+            parse_trusted_senders("")
+
+    def test_empty_returns_empty_set_when_not_required(self) -> None:
+        assert parse_trusted_senders("", required=False) == frozenset()
+
+    def test_invalid_email_raises(self) -> None:
+        with pytest.raises(EnvironmentError, match="invalid email"):
+            parse_trusted_senders("a@company.com,not-an-email")
+
+    def test_invalid_email_raises_even_when_not_required(self) -> None:
+        with pytest.raises(EnvironmentError, match="invalid email"):
+            parse_trusted_senders("not-an-email", required=False)

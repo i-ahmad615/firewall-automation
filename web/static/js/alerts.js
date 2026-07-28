@@ -3,12 +3,25 @@ const state = {
   sort_by: 'received_at', sort_dir: 'desc', page: 1, page_size: 25,
 };
 let debounceTimer;
+const selectedIds = new Set();
+let visibleIds = [];
+
+function showBulkActionMessage(message, isError = false) {
+  const banner = document.getElementById('bulk-action-message');
+  banner.style.display = message ? 'flex' : 'none';
+  banner.className = `alert-banner ${isError ? 'error' : 'success'}`;
+  banner.textContent = message;
+}
 
 function applyStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
   ['search', 'status', 'action_taken', 'classification', 'notification_sent'].forEach(key => {
     if (params.has(key)) state[key] = params.get(key);
   });
+  ['page', 'page_size'].forEach(key => {
+    if (params.has(key) && Number.isFinite(Number(params.get(key)))) state[key] = Math.max(1, Number(params.get(key)));
+  });
+  ['sort_by', 'sort_dir'].forEach(key => { if (params.has(key)) state[key] = params.get(key); });
   document.getElementById('f-search').value = state.search;
   document.getElementById('f-status').value = state.status;
   document.getElementById('f-action').value = state.action_taken;
@@ -42,7 +55,8 @@ function renderActiveFilterBanner() {
 
 function rowHtml(r) {
   return `
-    <tr>
+    <tr class="clickable-row" data-alert-id="${escapeHtml(r.id)}" tabindex="0" aria-label="Open alert ${escapeHtml(r.id)} details">
+      <td class="selection-cell"><input class="row-select" type="checkbox" data-select-id="${escapeHtml(r.id)}" aria-label="Select alert ${escapeHtml(r.id)}" ${selectedIds.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="cell-mono">${fmtDate(r.received_at)}<br><span class="cell-muted">${fmtClock(r.received_at)}</span></td>
       <td class="cell-wrap">${escapeHtml(r.subject)}</td>
       <td>${escapeHtml(r.sender)}</td>
@@ -55,11 +69,17 @@ function rowHtml(r) {
 }
 
 async function load() {
+  const query = qs(state);
+  history.replaceState(null, '', query ? `/alerts?${query}` : '/alerts');
   renderActiveFilterBanner();
   const data = await fetchJson(`/api/alerts?${qs(state)}`);
+  visibleIds = data.rows.map(row => Number(row.id));
+  const visibleSet = new Set(visibleIds);
+  [...selectedIds].forEach(id => { if (!visibleSet.has(id)) selectedIds.delete(id); });
   document.getElementById('table-body').innerHTML =
     data.rows.length ? data.rows.map(rowHtml).join('') :
-    `<tr><td colspan="8"><div class="empty-state">No alerts match the current filters.</div></td></tr>`;
+    `<tr><td colspan="9"><div class="empty-state">No alerts match the current filters.</div></td></tr>`;
+  updateSelectionUi();
 
   const totalPages = Math.max(1, Math.ceil(data.total / data.page_size));
   document.getElementById('page-info').textContent = `Page ${data.page} of ${totalPages} · ${data.total} total`;
@@ -70,6 +90,16 @@ async function load() {
     th.classList.toggle('sorted', th.dataset.key === state.sort_by);
     th.classList.toggle('asc', th.dataset.key === state.sort_by && state.sort_dir === 'asc');
   });
+}
+
+function updateSelectionUi() {
+  const button = document.getElementById('delete-selected');
+  button.disabled = selectedIds.size === 0;
+  button.textContent = `Delete Selected (${selectedIds.size})`;
+  const selectPage = document.getElementById('select-page');
+  const selectedVisible = visibleIds.filter(id => selectedIds.has(id)).length;
+  selectPage.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+  selectPage.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
 }
 
 document.getElementById('f-search').addEventListener('input', (e) => {
@@ -96,8 +126,67 @@ document.getElementById('clear-all').addEventListener('click', async () => {
   });
   if (!confirmed) return;
   await fetchJson('/api/alerts', { method: 'DELETE' });
+  selectedIds.clear();
   state.page = 1;
   load();
+});
+
+document.getElementById('delete-selected').addEventListener('click', async () => {
+  if (!selectedIds.size) return;
+  const count = selectedIds.size;
+  const confirmed = await confirmDialog({
+    title: 'Delete Selected Alerts',
+    message: `Permanently delete ${count} selected alert record${count === 1 ? '' : 's'} from the database?`,
+    confirmLabel: 'Delete Selected',
+  });
+  if (!confirmed) return;
+  const button = document.getElementById('delete-selected');
+  button.disabled = true;
+  showBulkActionMessage('');
+  try {
+    const result = await fetchJson('/api/alerts/delete-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [...selectedIds] }),
+    });
+    if (!result.deleted) throw new Error('No selected records were found');
+    selectedIds.clear();
+    state.page = 1;
+    showBulkActionMessage(`${result.deleted} alert record${result.deleted === 1 ? '' : 's'} deleted.`);
+    await load();
+  } catch (error) {
+    showBulkActionMessage(`Unable to delete the selected alerts: ${error.message}.`, true);
+    updateSelectionUi();
+  }
+});
+
+document.getElementById('select-page').addEventListener('change', event => {
+  visibleIds.forEach(id => event.target.checked ? selectedIds.add(id) : selectedIds.delete(id));
+  document.querySelectorAll('[data-select-id]').forEach(input => { input.checked = event.target.checked; });
+  updateSelectionUi();
+});
+
+function openAlertRow(row) {
+  const returnTo = window.location.pathname + window.location.search;
+  window.location.href = `/alerts/${encodeURIComponent(row.dataset.alertId)}?return=${encodeURIComponent(returnTo)}`;
+}
+document.getElementById('table-body').addEventListener('click', event => {
+  if (event.target.closest('[data-select-id]')) return;
+  const row = event.target.closest('[data-alert-id]');
+  if (row) openAlertRow(row);
+});
+document.getElementById('table-body').addEventListener('change', event => {
+  const input = event.target.closest('[data-select-id]');
+  if (!input) return;
+  const id = Number(input.dataset.selectId);
+  input.checked ? selectedIds.add(id) : selectedIds.delete(id);
+  updateSelectionUi();
+});
+document.getElementById('table-body').addEventListener('keydown', event => {
+  if (event.target.closest('[data-select-id]')) return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const row = event.target.closest('[data-alert-id]');
+  if (row) { event.preventDefault(); openAlertRow(row); }
 });
 
 applyStateFromUrl();

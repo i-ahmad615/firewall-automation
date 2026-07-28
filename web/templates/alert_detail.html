@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Alert Details{% endblock %}
+{% block heading %}Alert Details{% endblock %}
+
+{% block content %}
+<div class="detail-toolbar">
+  <a class="btn" id="back-to-alerts" href="/alerts">&larr; Back to Alert History</a>
+  <span class="text-muted text-sm" id="detail-alert-label">Loading alert…</span>
+</div>
+
+<div class="alert-banner error" id="detail-error" hidden></div>
+<div class="detail-loading card" id="detail-loading">Loading alert details…</div>
+
+<main class="detail-stack" id="detail-content" hidden>
+  <section class="card panel detail-section">
+    <div class="panel-header"><h2>Alert Summary</h2><span id="summary-status"></span></div>
+    <div class="kv-grid" id="summary-grid"></div>
+  </section>
+
+  <section class="card panel detail-section">
+    <div class="panel-header">
+      <h2>Original Email</h2>
+      <button class="btn" id="toggle-email" type="button">Expand full email</button>
+    </div>
+    <div class="kv-grid compact" id="email-meta"></div>
+    <div class="email-body collapsed" id="email-body"></div>
+    <div class="empty-state" id="email-empty" hidden>No original email body was stored for this older alert.</div>
+  </section>
+
+  <section class="card panel detail-section">
+    <div class="panel-header"><h2>Extracted IP Information</h2></div>
+    <div class="kv-grid" id="ip-grid"></div>
+  </section>
+
+  <section class="card panel detail-section">
+    <div class="panel-header"><h2>Validation Result</h2><span id="validation-decision"></span></div>
+    <div class="validation-list" id="validation-list"></div>
+  </section>
+
+  <section class="card panel detail-section">
+    <div class="panel-header">
+      <h2>Retry History</h2>
+      <div class="flex gap-2" id="retry-actions"></div>
+    </div>
+    <div class="kv-grid compact" id="retry-summary"></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Attempt</th><th>Date / Time</th><th>Status</th><th>Error</th><th>Next Retry</th><th>Source</th></tr></thead>
+        <tbody id="retry-table"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>window.ALERT_DETAIL_ID = {{ alert_id }};</script>
+<script src="/static/js/alert_detail.js"></script>
+{% endblock %}

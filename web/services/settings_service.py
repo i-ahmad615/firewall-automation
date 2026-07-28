@@ -9,10 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.config import parse_trusted_senders
 from core.env_file import read_env_pairs, write_env_pairs
 
 _ENV_PATH = ".env"
 MASK = "********"
+# Legacy singular env var, still read for display/migration -- see
+# core.config.load_config() for the matching backward-compat fallback.
+_LEGACY_TRUSTED_SENDER_KEY = "TRUSTED_SENDER"
 
 # (section, key, field_type, is_secret)
 _FIELDS: list[tuple[str, str, str, bool]] = [
@@ -26,7 +30,7 @@ _FIELDS: list[tuple[str, str, str, bool]] = [
     ("imap", "EMAIL_USERNAME", "text", False),
     ("imap", "EMAIL_PASSWORD", "password", True),
     ("imap", "IMAP_POLL_INTERVAL", "number", False),
-    ("imap", "TRUSTED_SENDER", "text", False),
+    ("imap", "TRUSTED_SENDERS", "text", False),
     ("imap", "ALERT_KEYWORDS", "text", False),
     # SMTP
     ("smtp", "SMTP_HOST", "text", False),
@@ -67,6 +71,14 @@ _DEFAULTS: dict[str, str] = {
     "DASHBOARD_ADMIN_USERNAME": "admin",
 }
 
+# Extra guidance shown under specific fields in the form.
+_HINTS: dict[str, str] = {
+    "TRUSTED_SENDERS": (
+        "Comma-separated list of trusted sender email addresses, e.g. "
+        "soc@company.com, alerts@company.com"
+    ),
+}
+
 
 def load_settings() -> dict[str, dict[str, Any]]:
     """Return settings grouped by section, with secrets masked."""
@@ -75,13 +87,24 @@ def load_settings() -> dict[str, dict[str, Any]]:
         "imap": {}, "smtp": {}, "firewall": {}, "application": {},
     }
     for section, key, field_type, is_secret in _FIELDS:
-        raw_value = current.get(key, "") or _DEFAULTS.get(key, "")
+        if key == "TRUSTED_SENDERS":
+            # Fall back to the legacy singular var for display so an
+            # existing .env that only has TRUSTED_SENDER still shows its
+            # current value here instead of an empty field.
+            raw_value = (
+                current.get("TRUSTED_SENDERS", "")
+                or current.get(_LEGACY_TRUSTED_SENDER_KEY, "")
+                or _DEFAULTS.get(key, "")
+            )
+        else:
+            raw_value = current.get(key, "") or _DEFAULTS.get(key, "")
         display_value = MASK if (is_secret and raw_value) else raw_value
         sections[section][key] = {
             "value": display_value,
             "type": field_type,
             "is_secret": is_secret,
             "choices": None,
+            "hint": _HINTS.get(key),
         }
     return sections
 
@@ -114,6 +137,14 @@ def save_settings(form: dict[str, str]) -> list[str]:
             # a credential on purpose, e.g. to disable dashboard auth.
             if is_secret:
                 updates[key] = value
+            continue
+        if key == "TRUSTED_SENDERS":
+            try:
+                parse_trusted_senders(value, required=False)
+            except EnvironmentError as exc:
+                errors.append(str(exc))
+                continue
+            updates[key] = value
             continue
         if field_type == "number":
             try:

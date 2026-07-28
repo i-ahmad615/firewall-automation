@@ -11,7 +11,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.config import AppConfig
-from core.email_client import EmailConnectionError, ImapMailbox, send_notification
+from core import email_status
+from core.email_client import (
+    EmailConnectionError, ImapMailbox, check_smtp_connection, send_notification,
+)
 
 
 def _make_config() -> AppConfig:
@@ -38,7 +41,7 @@ def _make_config() -> AppConfig:
         smtp_password="secret",
         smtp_from_address="monitor@company.com",
         notification_email="security-alerts@company.com",
-        trusted_sender="alerts@company.com",
+        trusted_senders=frozenset({"alerts@company.com"}),
         alert_keywords=frozenset({"attack"}),
         allowed_ips_file="config/allowed_ips.txt",
         log_directory="logs",
@@ -147,3 +150,29 @@ class TestSendNotification:
         with patch("core.email_client.smtplib.SMTP", return_value=mock_smtp):
             with pytest.raises(EmailConnectionError, match="authentication failed"):
                 send_notification(config, "Subject", "Body")
+
+
+class TestSmtpConnectivityCheck:
+    def test_authenticates_and_uses_noop_without_sending(self) -> None:
+        config = _make_config()
+        mock_smtp = MagicMock()
+        mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+        mock_smtp.__exit__ = MagicMock(return_value=False)
+
+        with patch("core.email_client._open_smtp_connection", return_value=mock_smtp):
+            check_smtp_connection(config)
+
+        mock_smtp.login.assert_called_once_with("monitor@company.com", "secret")
+        mock_smtp.noop.assert_called_once_with()
+        mock_smtp.send_message.assert_not_called()
+        assert email_status.get_status("smtp")["online"] is True
+
+    def test_connection_failure_sets_offline(self) -> None:
+        config = _make_config()
+        with patch(
+            "core.email_client._open_smtp_connection",
+            side_effect=OSError("connection refused"),
+        ):
+            with pytest.raises(EmailConnectionError, match="connection failed"):
+                check_smtp_connection(config)
+        assert email_status.get_status("smtp")["online"] is False

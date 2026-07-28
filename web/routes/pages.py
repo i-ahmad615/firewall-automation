@@ -65,6 +65,32 @@ def firewall_page(request: Request):
     return templates.TemplateResponse(request, "firewall.html", {"active": "firewall"})
 
 
+@router.get("/firewall-console")
+def open_firewall_console(request: Request):
+    """Open the configured Sophos console without exposing API credentials."""
+    redirect = _guarded(request)
+    if redirect:
+        return redirect
+    config = request.app.state.config
+    host = config.firewall_host.strip()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return RedirectResponse(
+        url=f"https://{host}:{config.firewall_port}/",
+        status_code=307,
+    )
+
+
+@router.get("/failed-ip-queue", response_class=HTMLResponse)
+def failed_ip_queue_page(request: Request):
+    redirect = _guarded(request)
+    if redirect:
+        return redirect
+    return templates.TemplateResponse(
+        request, "failed_ip_queue.html", {"active": "failed-ip-queue"}
+    )
+
+
 @router.get("/logs", response_class=HTMLResponse)
 def logs_page(request: Request):
     redirect = _guarded(request)

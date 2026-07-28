@@ -12,7 +12,7 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import List
 
-logger = logging.getLogger(__name__)
+logger = logging.LoggerAdapter(logging.getLogger(__name__), {"technical": True})
 
 # SFOS requires every <Network> element in a rule to be the NAME of an IP Host
 # object — raw IP addresses are rejected with code 501.  We derive a stable,
@@ -149,6 +149,37 @@ def append_ip_to_rule(ip: str, rule_element: ET.Element) -> ET.Element:
         f"Cannot find or create a SourceNetworks container in rule XML. "
         f"Tried tags: {_SOURCE_CONTAINER_TAGS}. "
         f"Rule snippet: {ET.tostring(rule_element, encoding='unicode')[:500]}"
+    )
+
+
+def remove_ip_from_rule(ip: str, rule_element: ET.Element) -> ET.Element:
+    """Remove *ip* from the rule's source-network list. Inverse of :func:`append_ip_to_rule`.
+
+    Matches either the raw IP string (legacy/other firmware) or the derived
+    IP host object name (``blocked-X-X-X-X``), mirroring :func:`ip_in_rule`.
+
+    Raises
+    ------
+    InvalidXMLError
+        If neither the raw IP nor its host-object name is present in any
+        source-network container -- callers should check :func:`ip_in_rule`
+        first if "nothing to remove" should be handled as a non-error case.
+    """
+    ip = ip.strip()
+    targets = {ip, make_host_name(ip)}
+
+    for tag in _SOURCE_CONTAINER_TAGS:
+        for container in rule_element.findall(f".//{tag}"):
+            for child in list(container):
+                text = (child.text or "").strip()
+                if text in targets:
+                    container.remove(child)
+                    logger.info("Removed %r from <%s>", text, tag)
+                    return rule_element
+
+    raise InvalidXMLError(
+        f"Cannot find {ip!r} (or host object {make_host_name(ip)!r}) in any "
+        f"source-network container -- nothing to remove."
     )
 
 

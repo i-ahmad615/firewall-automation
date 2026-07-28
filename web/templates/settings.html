@@ -24,6 +24,9 @@
     {% else %}
       <input class="input" type="text" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}">
     {% endif %}
+    {% if spec.hint and spec.type not in ('bool', 'password') %}
+      <span class="field-hint">{{ spec.hint }}</span>
+    {% endif %}
   </div>
 {% endmacro %}
 

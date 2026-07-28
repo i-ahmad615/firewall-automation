@@ -14,17 +14,17 @@
   </div>
 
   <div class="table-toolbar mt-2" style="margin-bottom: var(--space-4)">
-    <input class="input input-search" id="f-search" placeholder="Search message, action…">
+    <input class="input input-search" id="f-search" placeholder="Search log messages…">
     <select class="select" id="f-severity">
       <option value="">All severities</option>
-      <option value="DEBUG">Debug</option>
       <option value="INFO">Info</option>
+      <option value="SUCCESS">Success</option>
       <option value="WARNING">Warning</option>
       <option value="ERROR">Error</option>
       <option value="CRITICAL">Critical</option>
     </select>
-    <select class="select" id="f-module">
-      <option value="">All modules</option>
+    <select class="select" id="f-category">
+      <option value="">All categories</option>
     </select>
     <input class="input" type="date" id="f-from" title="From date">
     <input class="input" type="date" id="f-to" title="To date">
@@ -35,10 +35,9 @@
     <table class="data-table" id="table">
       <thead>
         <tr>
-          <th>Timestamp</th>
-          <th>Severity</th>
-          <th>Module</th>
-          <th>Action</th>
+          <th>Time</th>
+          <th>Level</th>
+          <th>Category</th>
           <th>Message</th>
         </tr>
       </thead>
@@ -57,5 +56,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/logs.js"></script>
+<script src="/static/js/logs.js?v=20260728-1"></script>
 {% endblock %}

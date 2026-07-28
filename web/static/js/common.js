@@ -28,9 +28,9 @@
 })();
 
 // ── Firewall connectivity status pill (topbar, all pages) ──────────────────
-(function initFirewallStatus() {
-  const pill = document.getElementById('firewall-status-pill');
-  const label = document.getElementById('firewall-status-label');
+function initConnectivityStatus(service, displayName) {
+  const pill = document.getElementById(`${service}-status-pill`);
+  const label = document.getElementById(`${service}-status-label`);
   if (!pill || !label) return;
 
   function render(state, text) {
@@ -41,29 +41,29 @@
 
   function applyStatus(status) {
     if (status.online === true) {
-      render('online', 'Firewall: online');
+      render('online', `${displayName}: online`);
     } else if (status.online === false) {
-      render('offline', 'Firewall: unreachable');
+      render('offline', `${displayName}: unavailable`);
     } else {
-      render('checking', 'Firewall: checking…');
+      render('checking', `${displayName}: checking…`);
     }
   }
 
   async function refresh() {
     try {
-      const status = await fetchJson('/api/firewall-status');
+      const status = await fetchJson(`/api/${service}-status`);
       applyStatus(status);
     } catch (e) { /* ignore transient errors */ }
   }
 
   async function testNow() {
-    render('checking', 'Firewall: checking…');
+    render('checking', `${displayName}: checking…`);
     pill.disabled = true;
     try {
-      const status = await fetchJson('/api/firewall-status/check', { method: 'POST' });
+      const status = await fetchJson(`/api/${service}-status/check`, { method: 'POST' });
       applyStatus(status);
     } catch (e) {
-      render('offline', 'Firewall: unreachable');
+      render('offline', `${displayName}: unavailable`);
     } finally {
       pill.disabled = false;
     }
@@ -72,7 +72,11 @@
   pill.addEventListener('click', testNow);
   refresh();
   setInterval(refresh, 20000);
-})();
+}
+
+initConnectivityStatus('firewall', 'Firewall');
+initConnectivityStatus('imap', 'IMAP');
+initConnectivityStatus('smtp', 'SMTP');
 
 // ── Reusable confirmation modal (for destructive actions) ──────────────────
 function confirmDialog({ title = 'Are you sure?', message = '', confirmLabel = 'Yes', cancelLabel = 'No', danger = true } = {}) {
@@ -146,7 +150,9 @@ function fmtClock(iso) {
 const BADGE_MAP = {
   blocked: 'success', duplicate: 'warning', allowed: 'info', failed: 'danger',
   ignored: 'neutral', processed: 'info', success: 'success', failure: 'danger',
-  sent: 'success',
+  sent: 'success', stopped: 'neutral', paused: 'neutral', pending: 'warning', retrying: 'info',
+  'pending retry': 'warning', unblocked: 'info', removed: 'neutral',
+  passed: 'success', skipped: 'neutral', rejected: 'danger',
 };
 
 function badgeHtml(value) {
@@ -156,7 +162,7 @@ function badgeHtml(value) {
 }
 
 function severityBadge(sev) {
-  const tone = { ERROR: 'danger', CRITICAL: 'danger', WARNING: 'warning', INFO: 'info', DEBUG: 'neutral' }[sev] || 'neutral';
+  const tone = { ERROR: 'danger', CRITICAL: 'danger', WARNING: 'warning', SUCCESS: 'success', INFO: 'info', DEBUG: 'neutral' }[sev] || 'neutral';
   return `<span class="badge ${tone}">${sev}</span>`;
 }
 

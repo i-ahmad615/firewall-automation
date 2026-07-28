@@ -1,40 +1,135 @@
-"""Logging configuration for SecurityAlertAutomation.
-
-Sets up a rotating file handler (UTF-8) and a console handler.
-Call configure_logging() exactly once at startup.
-"""
+"""Production-safe logging configuration for SecurityAlertAutomation."""
 from __future__ import annotations
 
+import copy
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
+from typing import Any
 
 from . import database, event_bus
 from .event_translator import translate
 
-_LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+SUCCESS = 25
+logging.addLevelName(SUCCESS, "SUCCESS")
+
+
+def _success(self: logging.Logger, message: object, *args: Any, **kwargs: Any) -> None:
+    if self.isEnabledFor(SUCCESS):
+        self._log(SUCCESS, message, args, **kwargs)
+
+
+if not hasattr(logging.Logger, "success"):
+    setattr(logging.Logger, "success", _success)
+
+_PRODUCTION_FORMAT = "%(asctime)s  %(levelname)-8s %(category)-20s %(message)s"
+_DEBUG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
 _MAX_BYTES = 5_000_000
 _BACKUP_COUNT = 5
+_CREDENTIAL_XML_RE = re.compile(
+    r"(<(?:Username|Password|Token|APIKey)>).*?(</(?:Username|Password|Token|APIKey)>)",
+    re.IGNORECASE | re.DOTALL,
+)
+_SECRET_PAIR_RE = re.compile(
+    r"(?i)\b(password|passwd|token|api[_-]?key|secret|username|user|login)\b"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_AUTH_IDENTITY_RE = re.compile(
+    r"(?i)\b(authentication failed for|authenticated as)\s+[^\s,:;]+"
+)
+
+
+def redact_sensitive(value: object) -> str:
+    """Return text with common credential representations redacted."""
+    text = str(value)
+    text = _CREDENTIAL_XML_RE.sub(r"\1***REDACTED***\2", text)
+    text = _SECRET_PAIR_RE.sub(r"\1\2***REDACTED***", text)
+    text = _AUTH_IDENTITY_RE.sub(r"\1 ***REDACTED***", text)
+    return _BEARER_RE.sub("Bearer ***REDACTED***", text)
+
+
+def truncate_debug(value: object, max_chars: int) -> str:
+    """Redact and bound a technical message for safe debug-file storage."""
+    text = redact_sensitive(value)
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return f"{text[:max_chars]} … [truncated; {omitted} characters omitted]"
+
+
+class ProductionFilter(logging.Filter):
+    """Allow clean INFO+ business events and exclude technical internals."""
+
+    def __init__(self, minimum_level: int = logging.INFO) -> None:
+        super().__init__()
+        self.minimum_level = minimum_level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= self.minimum_level and not getattr(
+            record, "technical", False
+        )
+
+
+class ExactLevelFilter(logging.Filter):
+    def __init__(self, minimum: int, maximum: int | None = None) -> None:
+        super().__init__()
+        self.minimum = minimum
+        self.maximum = maximum
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= self.minimum and (
+            self.maximum is None or record.levelno <= self.maximum
+        )
+
+
+class SafeFormatter(logging.Formatter):
+    """Formatter which redacts messages and can suppress stack traces."""
+
+    def __init__(
+        self,
+        fmt: str,
+        *,
+        datefmt: str,
+        max_chars: int,
+        include_exception: bool,
+    ) -> None:
+        super().__init__(fmt=fmt, datefmt=datefmt)
+        self.max_chars = max_chars
+        self.include_exception = include_exception
+
+    def format(self, record: logging.LogRecord) -> str:
+        safe = copy.copy(record)
+        safe.category = getattr(record, "category", "Application")
+        safe.msg = truncate_debug(record.getMessage(), self.max_chars)
+        safe.args = ()
+        if not self.include_exception:
+            safe.exc_info = None
+            safe.exc_text = None
+            safe.stack_info = None
+        rendered = super().format(safe)
+        return redact_sensitive(rendered)
 
 
 class SQLiteEventHandler(logging.Handler):
-    """Writes structured log rows to SQLite and publishes them for SSE."""
+    """Store only production-safe business events for dashboard/SSE use."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            raw_message = record.getMessage()
             event = translate(
                 level_name=record.levelname,
                 module_name=record.name,
-                raw_message=raw_message,
+                raw_message=redact_sensitive(record.getMessage()),
+                category_name=getattr(record, "category", ""),
             )
             timestamp = datetime.now(timezone.utc).isoformat()
             database.record_log(
                 severity=event.severity,
-                module=record.name,
-                action=event.category,
+                module=event.category,
+                action="",
                 message=event.message,
                 timestamp=timestamp,
             )
@@ -48,59 +143,103 @@ class SQLiteEventHandler(logging.Handler):
                 }
             )
         except Exception:
-            pass  # logging must never raise
+            pass
 
 
-def configure_logging(log_dir: str = "logs", level: str = "INFO", enable_db: bool = False) -> None:
-    """Configure the root logger with console and rotating file handlers.
+def _managed(handler: logging.Handler) -> logging.Handler:
+    setattr(handler, "_security_automation_handler", True)
+    return handler
 
-    Safe to call multiple times — subsequent calls are no-ops once handlers
-    are already attached.
 
-    Parameters
-    ----------
-    log_dir:
-        Directory for app.log (created if absent).
-    level:
-        Logging level string, e.g. ``"INFO"``, ``"DEBUG"``.
+def configure_logging(
+    log_dir: str = "logs",
+    level: str = "INFO",
+    enable_db: bool = False,
+    *,
+    debug_logging: bool = False,
+    debug_max_chars: int = 2000,
+) -> None:
+    """Configure clean production logs and optional isolated debug logs.
+
+    Reconfiguration is deliberate: startup first installs a safe console,
+    then calls this again after loading ``.env``. Managed handlers are
+    replaced so the second call never duplicates an event.
     """
     root = logging.getLogger()
-    already_configured = any(
-        isinstance(h, (logging.StreamHandler, RotatingFileHandler)) for h in root.handlers
+    for handler in list(root.handlers):
+        if getattr(handler, "_security_automation_handler", False):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+
+    numeric_level = getattr(logging, level.upper(), logging.INFO)
+    production_level = max(logging.INFO, numeric_level)
+    root.setLevel(logging.DEBUG if debug_logging else production_level)
+    os.makedirs(log_dir, exist_ok=True)
+
+    production_formatter = SafeFormatter(
+        _PRODUCTION_FORMAT,
+        datefmt="%b %d, %H:%M:%S",
+        max_chars=debug_max_chars,
+        include_exception=False,
     )
+    detailed_formatter = SafeFormatter(
+        _DEBUG_FORMAT,
+        datefmt="%Y-%m-%d %H:%M:%S",
+        max_chars=debug_max_chars,
+        include_exception=True,
+    )
+    production_filter = ProductionFilter(production_level)
 
-    if not already_configured:
-        numeric_level = getattr(logging, level, logging.INFO)
-        root.setLevel(numeric_level)
-        fmt = logging.Formatter(_LOG_FORMAT)
+    console = _managed(logging.StreamHandler(sys.stdout))
+    console.setLevel(production_level)
+    console.addFilter(production_filter)
+    console.setFormatter(production_formatter)
+    root.addHandler(console)
 
-        # ── Console handler ────────────────────────────────────────────────
-        # Force UTF-8 output on Windows (avoids cp1252 UnicodeEncodeError).
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-        except AttributeError:
-            pass  # Python < 3.7 or non-standard stdout
+    application = _managed(RotatingFileHandler(
+        os.path.join(log_dir, "application.log"),
+        maxBytes=_MAX_BYTES,
+        backupCount=_BACKUP_COUNT,
+        encoding="utf-8",
+    ))
+    application.setLevel(production_level)
+    application.addFilter(production_filter)
+    application.setFormatter(production_formatter)
+    root.addHandler(application)
 
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        root.addHandler(sh)
+    errors = _managed(RotatingFileHandler(
+        os.path.join(log_dir, "error.log"),
+        maxBytes=_MAX_BYTES,
+        backupCount=_BACKUP_COUNT,
+        encoding="utf-8",
+    ))
+    errors.setLevel(logging.ERROR)
+    errors.addFilter(ExactLevelFilter(logging.ERROR))
+    errors.addFilter(production_filter)
+    errors.setFormatter(detailed_formatter)
+    root.addHandler(errors)
 
-        # ── Rotating file handler ──────────────────────────────────────────
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "app.log")
-        fh = RotatingFileHandler(
-            log_file,
+    if debug_logging:
+        debug_file = _managed(RotatingFileHandler(
+            os.path.join(log_dir, "debug.log"),
             maxBytes=_MAX_BYTES,
             backupCount=_BACKUP_COUNT,
             encoding="utf-8",
-        )
-        fh.setFormatter(fmt)
-        root.addHandler(fh)
+        ))
+        debug_file.setLevel(logging.DEBUG)
+        debug_file.setFormatter(detailed_formatter)
+        root.addHandler(debug_file)
 
-    numeric_level = getattr(logging, level, logging.INFO)
-    root.setLevel(numeric_level)
-
-    # ── SQLite + live event-stream handler ─────────────────────────────
-    has_db_handler = any(isinstance(h, SQLiteEventHandler) for h in root.handlers)
-    if enable_db and not has_db_handler:
-        root.addHandler(SQLiteEventHandler())
+    if enable_db:
+        dashboard = _managed(SQLiteEventHandler())
+        dashboard.setLevel(production_level)
+        dashboard.addFilter(production_filter)
+        root.addHandler(dashboard)
