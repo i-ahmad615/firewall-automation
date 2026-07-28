@@ -222,8 +222,8 @@ EMAIL_LOOKBACK_MAX_MESSAGES=200
 DATABASE_PATH=data/app.db
 
 # Dashboard
-DASHBOARD_HOST=127.0.0.1
-DASHBOARD_PORT=8765
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=5000
 DASHBOARD_AUTO_OPEN_BROWSER=true
 DASHBOARD_ADMIN_USERNAME=admin
 DASHBOARD_ADMIN_PASSWORD=
@@ -359,8 +359,9 @@ found, etc.):
 ## The dashboard
 
 Once running, the dashboard is available at
-`http://<DASHBOARD_HOST>:<DASHBOARD_PORT>` (defaults to
-`http://127.0.0.1:5000`) and includes:
+`http://localhost:5000` on the server itself and through the server's LAN IP
+(for example, `http://192.168.0.3:5000`) from another device. By default,
+Uvicorn binds to all network interfaces at `0.0.0.0:5000`.
 
 | Page | What it shows |
 | --- | --- |

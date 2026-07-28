@@ -59,6 +59,14 @@ def _open_browser_when_ready(url: str, delay: float = 1.5) -> None:
         pass
 
 
+def _dashboard_browser_url(host: str, port: int) -> str:
+    """Return a locally usable URL without changing the server bind host."""
+    browser_host = "localhost" if host in {"0.0.0.0", "::"} else host
+    if ":" in browser_host and not browser_host.startswith("["):
+        browser_host = f"[{browser_host}]"
+    return f"http://{browser_host}:{port}"
+
+
 def _run_dashboard(app, host: str, port: int) -> None:
     """Run the uvicorn server, responsive to Ctrl+C.
 
@@ -173,13 +181,21 @@ def main() -> None:
         extra={"technical": True},
     )
 
-    dashboard_url = f"http://{config.dashboard_host}:{config.dashboard_port}"
+    dashboard_url = _dashboard_browser_url(
+        config.dashboard_host, config.dashboard_port
+    )
     if config.auto_open_browser:
         threading.Thread(
             target=_open_browser_when_ready, args=(dashboard_url,), daemon=True
         ).start()
 
     logger.info("Application services started", extra={"category": "Application"})
+    logger.info(
+        "Dashboard listening | Bind: %s:%d",
+        config.dashboard_host,
+        config.dashboard_port,
+        extra={"category": "Application"},
+    )
     logger.debug("Web dashboard endpoint: %s", dashboard_url, extra={"technical": True})
 
     from web.app import create_app

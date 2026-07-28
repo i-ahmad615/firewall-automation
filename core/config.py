@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import FrozenSet
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_PATH = _PROJECT_ROOT / ".env"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Required env-var names (absence causes a hard startup failure)
@@ -89,8 +92,8 @@ class AppConfig:
     imap_uid_reconcile_count: int = 20
 
     # Dashboard
-    dashboard_host: str = "127.0.0.1"
-    dashboard_port: int = 8765
+    dashboard_host: str = "0.0.0.0"
+    dashboard_port: int = 5000
     auto_open_browser: bool = True
     admin_username: str = "admin"
     admin_password: str = ""
@@ -184,7 +187,20 @@ def load_config() -> AppConfig:
     EnvironmentError
         If any required variable is absent, empty, or invalid.
     """
-    load_dotenv()
+    # The Settings page writes this exact project-root file. Load general
+    # settings with normal environment precedence, then read the two dashboard
+    # bind values directly below so a saved host/port cannot be shadowed by a
+    # stale inherited process variable after restart.
+    load_dotenv(dotenv_path=_ENV_PATH)
+    saved_env = dotenv_values(_ENV_PATH)
+    dashboard_host = str(
+        saved_env.get("DASHBOARD_HOST")
+        or os.environ.get("DASHBOARD_HOST", "0.0.0.0")
+    ).strip()
+    dashboard_port = str(
+        saved_env.get("DASHBOARD_PORT")
+        or os.environ.get("DASHBOARD_PORT", "5000")
+    )
 
     missing = [k for k in _REQUIRED if not os.environ.get(k, "").strip()]
     # TRUSTED_SENDERS is the canonical var; the legacy singular
@@ -316,9 +332,9 @@ def load_config() -> AppConfig:
         poll_interval=poll_interval,
         run_loop=_env_bool("IMAP_RUN_LOOP", "true"),
         database_path=os.environ.get("DATABASE_PATH", "data/app.db").strip(),
-        dashboard_host=os.environ.get("DASHBOARD_HOST", "127.0.0.1").strip(),
+        dashboard_host=dashboard_host,
         dashboard_port=_validate_port(
-            "DASHBOARD_PORT", os.environ.get("DASHBOARD_PORT", "8765")
+            "DASHBOARD_PORT", dashboard_port
         ),
         auto_open_browser=_env_bool("DASHBOARD_AUTO_OPEN_BROWSER", "true"),
         admin_username=os.environ.get("DASHBOARD_ADMIN_USERNAME", "admin").strip(),

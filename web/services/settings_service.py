@@ -7,12 +7,13 @@ through the client in plaintext.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from core.config import parse_trusted_senders
 from core.env_file import read_env_pairs, write_env_pairs
 
-_ENV_PATH = ".env"
+_ENV_PATH = str(Path(__file__).resolve().parents[2] / ".env")
 MASK = "********"
 # Legacy singular env var, still read for display/migration -- see
 # core.config.load_config() for the matching backward-compat fallback.
@@ -66,8 +67,8 @@ _DEFAULTS: dict[str, str] = {
     "IMAP_POLL_INTERVAL": "60",
     "FIREWALL_PING_INTERVAL": "60",
     "SMTP_TIMEOUT": "30",
-    "DASHBOARD_HOST": "127.0.0.1",
-    "DASHBOARD_PORT": "8765",
+    "DASHBOARD_HOST": "0.0.0.0",
+    "DASHBOARD_PORT": "5000",
     "DASHBOARD_ADMIN_USERNAME": "admin",
 }
 
@@ -76,6 +77,10 @@ _HINTS: dict[str, str] = {
     "TRUSTED_SENDERS": (
         "Comma-separated list of trusted sender email addresses, e.g. "
         "soc@company.com, alerts@company.com"
+    ),
+    "DASHBOARD_HOST": (
+        "Use 0.0.0.0 to make the dashboard available to other devices on "
+        "the same network."
     ),
 }
 
