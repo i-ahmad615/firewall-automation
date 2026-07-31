@@ -398,6 +398,10 @@ html.sidebar-pinned .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)
 .tone-neutral .stat-icon { background: rgba(91,107,124,0.12); color: var(--tint-gray-fg); }
 .tone-neutral .stat-value { color: var(--tint-gray-fg); }
 
+.tone-review { background: #f5f1ff; border-color: rgba(124, 58, 237, 0.12); }
+.tone-review .stat-icon { background: rgba(124, 58, 237, 0.13); color: #6d28d9; }
+.tone-review .stat-value { color: #6d28d9; }
+
 .section-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--space-5); }
 @media (max-width: 1100px) { .section-grid { grid-template-columns: 1fr; } }
 

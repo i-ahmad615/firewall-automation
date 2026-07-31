@@ -1,7 +1,7 @@
 """API + page route for the Alert Details page.
 
 Aggregates data already recorded by the existing alerts/pending_blocks/
-retry_history/blocked_ips tables into a single response --
+retry_history tables into a single response --
 no new "source of truth" is introduced here, this route only reads and
 lightly enriches (IP classification, host-object name, next-retry time)
 using the same pure helpers the rest of the app already relies on.
@@ -115,6 +115,10 @@ def api_get_alert_detail(alert_id: int, request: Request):
     parsed_data = _safe_json(alert.get("parsed_data"), {})
     validation_checks = _safe_json(alert.get("validation_results"), [])
     ip = (alert.get("origin_ip") or "").strip()
+    # The actual block target may be Origin *or* Impacted -- never assume
+    # Origin. Falls back to origin_ip for alerts recorded before
+    # selected_candidate existed.
+    block_candidate = (alert.get("selected_candidate") or "").strip() or ip
 
     email_raw = alert.get("email_body") or ""
     email = {
@@ -134,36 +138,38 @@ def api_get_alert_detail(alert_id: int, request: Request):
     ip_info: dict[str, Any] = {
         "origin_ip": ip or None,
         "impacted_ip": impacted_ip,
+        "block_candidate": block_candidate or None,
         "ip_type": None,
         "is_public": None,
-        "is_allowlisted": None,
+        "is_trusted": None,
         "already_blocked": None,
         "host_name": None,
         "first_seen": None,
         "last_seen": None,
         "previous_alert_count": 0,
     }
-    if ip:
+    if block_candidate:
         try:
-            addr = ipaddress.ip_address(ip)
+            addr = ipaddress.ip_address(block_candidate)
             ip_info["ip_type"] = f"IPv{addr.version}"
             ip_info["is_public"] = not addr.is_private
         except ValueError:
             pass
         try:
-            ip_info["is_allowlisted"] = registry.is_external_allowlisted(ip)
+            ip_info["is_trusted"] = registry.is_trusted(block_candidate)
         except RegistryUnavailable:
-            ip_info["is_allowlisted"] = None
-        blocked_row = database.get_blocked_ip(ip)
-        ip_info["already_blocked"] = bool(blocked_row and blocked_row.get("status") == "blocked")
-        ip_info["host_name"] = make_host_name(ip)
-        stats = database.get_ip_alert_stats(ip)
+            ip_info["is_trusted"] = None
+        ip_info["already_blocked"] = (
+            alert.get("processing_status") == "already_blocked"
+        )
+        ip_info["host_name"] = make_host_name(block_candidate)
+        stats = database.get_ip_alert_stats(ip) if ip else {}
         ip_info["first_seen"] = stats.get("first_seen")
         ip_info["last_seen"] = stats.get("last_seen")
         ip_info["previous_alert_count"] = max(0, (stats.get("count") or 0) - 1)
 
-    pending = database.get_pending_block(ip) if ip else None
-    history = database.list_retry_history(ip) if ip else []
+    pending = database.get_pending_block(block_candidate) if block_candidate else None
+    history = database.list_retry_history(block_candidate) if block_candidate else []
     for attempt in history:
         attempt["next_retry_at"] = (
             _compute_next_retry(attempt.get("attempted_at", ""), config.poll_interval)

@@ -1,5 +1,5 @@
 const state = {
-  search: '', status: '', action_taken: '', classification: '', notification_sent: '',
+  search: '', status: '', action_taken: '', decision_status: '', classification: '', notification_sent: '',
   sort_by: 'received_at', sort_dir: 'desc', page: 1, page_size: 25,
 };
 let debounceTimer;
@@ -15,7 +15,7 @@ function showBulkActionMessage(message, isError = false) {
 
 function applyStateFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  ['search', 'status', 'action_taken', 'classification', 'notification_sent'].forEach(key => {
+  ['search', 'status', 'action_taken', 'decision_status', 'classification', 'notification_sent'].forEach(key => {
     if (params.has(key)) state[key] = params.get(key);
   });
   ['page', 'page_size'].forEach(key => {
@@ -32,6 +32,13 @@ function renderActiveFilterBanner() {
   const active = [];
   if (state.status) active.push(['Status', state.status]);
   if (state.action_taken) active.push(['Action', state.action_taken]);
+  if (state.decision_status) {
+    const decisionLabels = {
+      both_trusted: 'Protected endpoints ignored',
+      both_untrusted: 'Neither endpoint trusted',
+    };
+    active.push(['Decision', decisionLabels[state.decision_status] || state.decision_status]);
+  }
   if (state.classification) active.push(['Classification', state.classification]);
   if (state.notification_sent !== '') active.push(['Notified', state.notification_sent === '1' ? 'Yes' : 'No']);
 
@@ -44,7 +51,7 @@ function renderActiveFilterBanner() {
     <button class="btn" id="clear-filters" type="button">Clear filters</button>
   `;
   document.getElementById('clear-filters').addEventListener('click', () => {
-    state.status = ''; state.action_taken = ''; state.classification = ''; state.notification_sent = '';
+    state.status = ''; state.action_taken = ''; state.decision_status = ''; state.classification = ''; state.notification_sent = '';
     document.getElementById('f-status').value = '';
     document.getElementById('f-action').value = '';
     state.page = 1;
@@ -60,7 +67,7 @@ function rowHtml(r) {
       <td class="cell-mono">${fmtDate(r.received_at)}<br><span class="cell-muted">${fmtClock(r.received_at)}</span></td>
       <td class="cell-wrap">${escapeHtml(r.subject)}</td>
       <td>${escapeHtml(r.sender)}</td>
-      <td class="cell-mono">${escapeHtml(r.origin_ip || '—')}</td>
+      <td class="cell-mono">${escapeHtml(r.blocked_ip || '-')}</td>
       <td>${escapeHtml(r.classification || '—')}</td>
       <td>${badgeHtml(r.status)}</td>
       <td>${badgeHtml(r.action_taken)}</td>

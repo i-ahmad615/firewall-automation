@@ -15,7 +15,7 @@ from typing import List
 logger = logging.LoggerAdapter(logging.getLogger(__name__), {"technical": True})
 
 # SFOS requires every <Network> element in a rule to be the NAME of an IP Host
-# object — raw IP addresses are rejected with code 501.  We derive a stable,
+# object â€” raw IP addresses are rejected with code 501.  We derive a stable,
 # predictable name from the attacker IP so duplicate detection is reliable.
 _HOST_NAME_PREFIX = "blocked-"
 
@@ -23,7 +23,7 @@ _HOST_NAME_PREFIX = "blocked-"
 def make_host_name(ip: str) -> str:
     """Return the SFOS IP host object name for the given attacker IP address.
 
-    Example: ``"69.5.169.189"`` → ``"blocked-69-5-169-189"``
+    Example: ``"69.5.169.189"`` â†’ ``"blocked-69-5-169-189"``
     """
     return f"{_HOST_NAME_PREFIX}{ip.strip().replace('.', '-')}"
 
@@ -48,9 +48,9 @@ class InvalidXMLError(Exception):
     """Raised when rule XML is structurally invalid or cannot be validated."""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Extraction helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def extract_rule_element(response_root: ET.Element, rule_name: str) -> ET.Element:
     """Return the ``<FirewallRule>`` element whose ``<Name>`` matches *rule_name*.
@@ -101,9 +101,9 @@ def ip_in_rule(ip: str, rule_element: ET.Element) -> bool:
     return ip.strip() in networks or make_host_name(ip) in networks
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Mutation helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def append_ip_to_rule(ip: str, rule_element: ET.Element) -> ET.Element:
     """Append *ip* to the rule's source-network list."""
@@ -152,41 +152,6 @@ def append_ip_to_rule(ip: str, rule_element: ET.Element) -> ET.Element:
     )
 
 
-def remove_ip_from_rule(ip: str, rule_element: ET.Element) -> ET.Element:
-    """Remove *ip* from the rule's source-network list. Inverse of :func:`append_ip_to_rule`.
-
-    Matches either the raw IP string (legacy/other firmware) or the derived
-    IP host object name (``blocked-X-X-X-X``), mirroring :func:`ip_in_rule`.
-
-    Raises
-    ------
-    InvalidXMLError
-        If neither the raw IP nor its host-object name is present in any
-        source-network container -- callers should check :func:`ip_in_rule`
-        first if "nothing to remove" should be handled as a non-error case.
-    """
-    ip = ip.strip()
-    targets = {ip, make_host_name(ip)}
-
-    for tag in _SOURCE_CONTAINER_TAGS:
-        for container in rule_element.findall(f".//{tag}"):
-            for child in list(container):
-                text = (child.text or "").strip()
-                if text in targets:
-                    container.remove(child)
-                    logger.info("Removed %r from <%s>", text, tag)
-                    return rule_element
-
-    raise InvalidXMLError(
-        f"Cannot find {ip!r} (or host object {make_host_name(ip)!r}) in any "
-        f"source-network container -- nothing to remove."
-    )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Validation
-# ──────────────────────────────────────────────────────────────────────────────
-
 def validate_rule_xml(rule_element: ET.Element) -> None:
     """Raise InvalidXMLError if *rule_element* fails structural validation.
 
@@ -215,3 +180,5 @@ def validate_rule_xml(rule_element: ET.Element) -> None:
 def rule_element_to_str(rule_element: ET.Element) -> str:
     """Return the element serialised as a compact unicode string (for logging)."""
     return ET.tostring(rule_element, encoding="unicode")
+
+

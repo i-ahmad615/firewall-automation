@@ -14,7 +14,7 @@ from core import (
     database, email_connectivity_monitor, email_status, event_bus,
     firewall_monitor, firewall_status,
 )
-from core.manual_actions import retry_now
+from core.retry_actions import retry_now
 from .. import auth
 
 router = APIRouter(prefix="/api")
@@ -90,6 +90,7 @@ def alerts(
     classification: str = "",
     status: str = "",
     action_taken: str = "",
+    decision_status: str = "",
     notification_sent: str = "",
     sort_by: str = "received_at",
     sort_dir: str = "desc",
@@ -104,7 +105,8 @@ def alerts(
         notif_filter = False
     return database.query_alerts(
         search=search, classification=classification, status=status,
-        action_taken=action_taken, notification_sent=notif_filter,
+        action_taken=action_taken, decision_status=decision_status,
+        notification_sent=notif_filter,
         sort_by=sort_by, sort_dir=sort_dir,
         page=page, page_size=page_size,
     )

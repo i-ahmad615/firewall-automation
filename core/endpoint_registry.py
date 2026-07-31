@@ -1,4 +1,22 @@
-"""Single database-backed registry for endpoint validation, matching and policy."""
+"""Single database-backed registry for endpoint validation, matching and trust policy.
+
+Trust policy (binary, no ownership truth table)
+------------------------------------------------
+An endpoint is **TRUSTED** if and only if it matches an *active* record in the
+Protected Endpoints database:
+
+* an IP endpoint matches an active ``IP`` record exactly, or falls inside an
+  active ``CIDR`` record, or
+* a hostname endpoint exactly equals an active ``HOSTNAME`` record (after
+  normalization).
+
+Anything that does not match is **UNTRUSTED** -- public and private addresses
+are treated identically; there is no separate "Century-owned" / "externally
+allowlisted" / "external public" / "unknown" ownership state used for the
+blocking decision. The ``category`` column on ``protected_endpoints`` is
+retained purely as an administrative label (so the dashboard can still show
+*why* an entry is protected); it plays no role in :func:`decide_endpoints`.
+"""
 from __future__ import annotations
 
 import ipaddress
@@ -13,7 +31,7 @@ CENTURY_OWNED = "CENTURY_OWNED"
 EXTERNAL_ALLOWLIST = "EXTERNAL_ALLOWLIST"
 REGISTRY_UNAVAILABLE_MESSAGE = (
     "Protected endpoint registry is unavailable. Automatic blocking was skipped "
-    "to prevent blocking a Century-owned or trusted endpoint."
+    "to prevent blocking a trusted endpoint."
 )
 _MASKED = frozenset({"masked", "redacted", "hidden", "unknown", "unavailable", "n/a", "na", "-", "--"})
 _HOSTNAME = re.compile(
@@ -32,15 +50,19 @@ class RegistryUnavailable(RuntimeError):
 
 @dataclass(frozen=True)
 class EndpointClassification:
+    """Result of classifying a single Origin/Impacted field value.
+
+    ``value_type`` is one of ``MISSING``, ``MASKED``, ``INVALID``, ``IP``,
+    ``CIDR`` or ``HOSTNAME``. ``is_trusted`` is the sole signal the decision
+    engine uses to determine trust -- it is only ever ``True`` for a ``valid``
+    ``IP`` or ``HOSTNAME`` that matched an active Protected Endpoint record.
+    """
+
     input: str
     normalized_value: str
     value_type: str
     validity: str
-    ownership: str
-    is_century_owned: bool
-    is_external_allowlisted: bool
-    is_protected: bool
-    is_external_public: bool
+    is_trusted: bool
     matched_entry_id: Optional[int] = None
     matched_value: Optional[str] = None
     matched_type: Optional[str] = None
@@ -153,12 +175,6 @@ def normalize_value(value: str, value_type: Optional[str] = None) -> tuple[str, 
     raise ValueError("Entry type must be IP, CIDR, or HOSTNAME.")
 
 
-def _public(address: ipaddress._BaseAddress) -> bool:
-    return bool(address.is_global and not address.is_private and not address.is_loopback
-                and not address.is_link_local and not address.is_multicast
-                and not address.is_reserved and not address.is_unspecified)
-
-
 class ProtectedEndpointRegistry:
     def get_active_endpoints(self) -> list[dict[str, Any]]:
         try:
@@ -176,7 +192,18 @@ class ProtectedEndpointRegistry:
     def normalize_endpoint(self, value: str, value_type: Optional[str] = None) -> str:
         return normalize_value(value, value_type)[0]
 
-    def match_endpoint(self, value: str, category: str = "") -> Optional[dict[str, Any]]:
+    def match_endpoint(self, value: str) -> Optional[dict[str, Any]]:
+        """Return the first active Protected Endpoint record matching *value*.
+
+        * ``IP`` values match an active ``IP`` record exactly, or an active
+          ``CIDR`` record that contains the address.
+        * Hostnames match an active ``HOSTNAME`` record exactly (after
+          normalization). No wildcard/subdomain matching is performed.
+
+        A raw ``CIDR`` value (i.e. the endpoint field itself is a network,
+        not a single address) never matches -- there is no "exact CIDR
+        match" trust mechanism, only "IP inside a trusted CIDR".
+        """
         raw = clean_parsed_endpoint(value)
         if not raw:
             return None
@@ -186,10 +213,7 @@ class ProtectedEndpointRegistry:
         except ValueError:
             address = None
         hostname = normalize_hostname(raw) if address is None else ""
-        matches: list[dict[str, Any]] = []
         for entry in entries:
-            if category and entry["category"] != category:
-                continue
             try:
                 if entry["value_type"] == "IP" and address is not None:
                     matched = address == ipaddress.ip_address(entry["normalized_value"])
@@ -203,14 +227,8 @@ class ProtectedEndpointRegistry:
             except ValueError:
                 matched = False
             if matched:
-                matches.append(entry)
-        if not matches:
-            return None
-        if category:
-            return matches[0]
-        # Ownership is stronger than external allowlisting. This also makes
-        # legacy IP/CIDR overlaps deterministic and fail-safe.
-        return next((entry for entry in matches if entry["category"] == CENTURY_OWNED), matches[0])
+                return entry
+        return None
 
     def classify_endpoint(self, value: Optional[str]) -> EndpointClassification:
         raw = (value or "").strip()
@@ -238,64 +256,58 @@ class ProtectedEndpointRegistry:
             normalized = str(address)
             match = self.match_endpoint(normalized)
             if match:
-                return self._matched(raw, normalized, "IP", match, _public(address))
+                return self._matched(raw, normalized, "IP", match)
             return EndpointClassification(
-                raw, normalized, "IP", "valid", "external_public" if _public(address) else "unknown",
-                False, False, False, _public(address), reason=(
-                    "Valid unprotected external public IP" if _public(address)
-                    else "IP is private, loopback, link-local, multicast, reserved or unspecified"
-                ),
+                raw, normalized, "IP", "valid", False,
+                reason="Valid IP address is not a trusted Protected Endpoint",
             )
         if "/" in cleaned or re.fullmatch(r"[0-9a-fA-F:.]+", cleaned):
             try:
                 network = ipaddress.ip_network(cleaned, strict=False)
             except ValueError:
                 return self._plain(raw, lower, "INVALID", "invalid", "Malformed IP or CIDR endpoint")
-            normalized = str(network)
-            exact = next((e for e in self.get_active_endpoints()
-                          if e["value_type"] == "CIDR" and e["normalized_value"] == normalized), None)
-            return self._matched(raw, normalized, "CIDR", exact, False) if exact else self._plain(
-                raw, normalized, "CIDR", "valid", "CIDR is not a blockable endpoint")
+            # A CIDR value can never be trusted (no "exact CIDR match" trust
+            # mechanism) and can never be a block target (only a single IP
+            # may be sent to Sophos) -- it is always routed to manual review.
+            return EndpointClassification(
+                raw, str(network), "CIDR", "valid", False,
+                reason="A CIDR range cannot establish trust or be selected as a block target",
+            )
         hostname = normalize_hostname(cleaned)
         if not _HOSTNAME.fullmatch(hostname):
             return self._plain(raw, hostname, "INVALID", "invalid", "Malformed endpoint")
         match = self.match_endpoint(hostname)
-        return self._matched(raw, hostname, "HOSTNAME", match, False) if match else self._plain(
-            raw, hostname, "HOSTNAME", "valid", "Hostname ownership could not be verified")
+        if match:
+            return self._matched(raw, hostname, "HOSTNAME", match)
+        return EndpointClassification(
+            raw, hostname, "HOSTNAME", "valid", False,
+            reason="Hostname is not a trusted Protected Endpoint",
+        )
 
-    def is_century_owned(self, value: str) -> bool:
-        return self.classify_endpoint(value).is_century_owned
-
-    def is_external_allowlisted(self, value: str) -> bool:
-        return self.classify_endpoint(value).is_external_allowlisted
-
-    def is_protected(self, value: str) -> bool:
-        return self.classify_endpoint(value).is_protected
+    def is_trusted(self, value: str) -> bool:
+        return self.classify_endpoint(value).is_trusted
 
     @staticmethod
     def _plain(raw, normalized, kind, validity, reason):
-        return EndpointClassification(raw, normalized, kind, validity, "unknown",
-                                      False, False, False, False, reason=reason)
+        return EndpointClassification(raw, normalized, kind, validity, False, reason=reason)
 
     @staticmethod
-    def _matched(raw, normalized, kind, match, is_public):
-        category = match["category"]
+    def _matched(raw, normalized, kind, match):
         result = EndpointClassification(
-            raw, normalized, kind, "valid",
-            "century_owned" if category == CENTURY_OWNED else "external_allowlist",
-            category == CENTURY_OWNED, category == EXTERNAL_ALLOWLIST, True, is_public,
-            int(match["id"]), match["value"], match["value_type"], category,
-            "Matched protected endpoint registry",
+            raw, normalized, kind, "valid", True,
+            int(match["id"]), match["value"], match["value_type"], match["category"],
+            "Matched an active Protected Endpoint record",
         )
         logger.debug(
-            "Endpoint %s classified as %s because it matched %s %s, protected endpoint record ID %s",
-            normalized, category, match["value_type"], match["value"], match["id"],
+            "Endpoint %s is TRUSTED because it matched %s %s, protected endpoint record ID %s",
+            normalized, match["value_type"], match["value"], match["id"],
             extra={"technical": True},
         )
         try:
             database.record_endpoint_audit(
                 "CLASSIFIED", endpoint_id=int(match["id"]), endpoint_value=normalized,
-                category=category, new_data={"matched_value": match["value"], "matched_type": match["value_type"]},
+                category=match["category"],
+                new_data={"matched_value": match["value"], "matched_type": match["value_type"]},
             )
         except Exception:
             logger.debug("Could not record endpoint classification audit", exc_info=True,
@@ -305,31 +317,53 @@ class ProtectedEndpointRegistry:
 
 registry = ProtectedEndpointRegistry()
 
+_INVALID_TYPES = frozenset({"MISSING", "MASKED", "INVALID"})
+
 
 def decide_endpoints(origin_value: Optional[str], impacted_value: Optional[str]) -> EndpointDecision:
+    """Binary trusted-vs-untrusted blocking decision.
+
+    1. Trusted Origin + untrusted Impacted (valid IP)   -> block Impacted.
+    2. Untrusted Origin (valid IP) + trusted Impacted    -> block Origin.
+    3. Trusted Origin + trusted Impacted                 -> review, block neither.
+    4. Untrusted Origin + untrusted Impacted             -> review, block neither.
+    5. Missing/masked/malformed/identical/CIDR-only, or an untrusted side
+       that is not a valid IP (hostname-only)             -> review, block neither.
+
+    A hostname or CIDR is never returned as ``selected_candidate`` -- only a
+    validated IP address may be selected as a block target.
+    """
     origin = registry.classify_endpoint(origin_value)
     impacted = registry.classify_endpoint(impacted_value)
-    invalid = {"MISSING", "MASKED", "INVALID"}
-    if origin.value_type in invalid or impacted.value_type in invalid:
+
+    if origin.value_type in _INVALID_TYPES or impacted.value_type in _INVALID_TYPES:
         return EndpointDecision(origin, impacted, None, None, "incomplete_or_invalid_endpoint",
                                 "Missing, masked, malformed or invalid endpoint")
     if origin.normalized_value == impacted.normalized_value:
         return EndpointDecision(origin, impacted, None, None, "same_endpoint",
                                 "Origin and Impacted endpoints are identical")
-    if origin.is_external_allowlisted or impacted.is_external_allowlisted:
-        return EndpointDecision(origin, impacted, None, None, "allowlisted",
-                                "An endpoint is protected by the external allowlist")
-    if origin.is_century_owned and impacted.is_century_owned:
-        return EndpointDecision(origin, impacted, None, None, "century_to_century",
-                                "Both endpoints belong to Century")
-    if origin.is_century_owned and impacted.is_external_public:
+    if origin.value_type == "CIDR" or impacted.value_type == "CIDR":
+        return EndpointDecision(origin, impacted, None, None, "cidr_endpoint_review",
+                                "A CIDR value cannot establish trust or be selected as a block target")
+
+    if origin.is_trusted and impacted.is_trusted:
+        return EndpointDecision(origin, impacted, None, None, "both_trusted",
+                                "Both Origin and Impacted are trusted Protected Endpoints")
+    if not origin.is_trusted and not impacted.is_trusted:
+        return EndpointDecision(origin, impacted, None, None, "both_untrusted",
+                                "Neither Origin nor Impacted is a trusted Protected Endpoint")
+
+    if origin.is_trusted:
+        # Origin trusted, Impacted untrusted.
+        if impacted.value_type != "IP":
+            return EndpointDecision(origin, impacted, None, None, "untrusted_target_not_ip",
+                                    "Untrusted Impacted endpoint is not a valid IP and cannot be blocked")
         return EndpointDecision(origin, impacted, impacted.normalized_value, "impacted",
-                                "approved_for_blocking", "Origin belongs to Century")
-    if origin.is_external_public and impacted.is_century_owned:
-        return EndpointDecision(origin, impacted, origin.normalized_value, "origin",
-                                "approved_for_blocking", "Impacted endpoint belongs to Century")
-    if origin.is_external_public and impacted.is_external_public:
-        return EndpointDecision(origin, impacted, None, None, "ambiguous_external_pair",
-                                "Neither endpoint belongs to Century")
-    return EndpointDecision(origin, impacted, None, None, "unknown_endpoint_review",
-                            "Endpoint ownership could not be verified")
+                                "approved_for_blocking", "Origin is trusted; Impacted is untrusted")
+
+    # Impacted trusted, Origin untrusted.
+    if origin.value_type != "IP":
+        return EndpointDecision(origin, impacted, None, None, "untrusted_target_not_ip",
+                                "Untrusted Origin endpoint is not a valid IP and cannot be blocked")
+    return EndpointDecision(origin, impacted, origin.normalized_value, "origin",
+                            "approved_for_blocking", "Impacted is trusted; Origin is untrusted")

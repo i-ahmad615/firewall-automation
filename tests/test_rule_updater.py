@@ -9,15 +9,15 @@ import xml.etree.ElementTree as ET
 import pytest
 from unittest.mock import MagicMock, patch
 
-from core.rule_updater import block_ip, unblock_ip, RuleUpdateError
+from core.rule_updater import block_ip, RuleUpdateError
 from core.firewall_client import FirewallAPIError
 from core import database
 from core.endpoint_registry import normalize_value
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _ENV_BASE: dict[str, str] = {
     "FIREWALL_HOST": "192.168.1.1",
@@ -76,13 +76,12 @@ def _mock_client(get_response: ET.Element) -> MagicMock:
     client.get_firewall_rule.return_value = get_response
     client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
     client.create_ip_host.return_value = None  # void
-    client.delete_ip_host.return_value = None  # void
     return client
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Tests
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestBlockIp:
     def test_allowed_ip_returns_allowed(
@@ -267,9 +266,9 @@ class TestBlockIp:
         mock_client_instance.logout.assert_called_once()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Post-upload verification -- prevents false "[BLOCKED]" notifications
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestBlockVerification:
     def test_raises_when_host_absent_after_upload(
@@ -331,147 +330,4 @@ class TestBlockVerification:
         assert mock_client.get_firewall_rule.call_count == 2
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# unblock_ip
-# ──────────────────────────────────────────────────────────────────────────────
-
-class TestUnblockIp:
-    def test_not_in_rule_returns_not_blocked(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client = _mock_client(_make_response(["1.1.1.1"]))
-
-        result = unblock_ip("9.9.9.9", config, client=mock_client)
-
-        assert result == "not_blocked"
-        mock_client.set_firewall_rule.assert_not_called()
-
-    def test_removes_raw_ip_returns_unblocked(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client.delete_ip_host.return_value = None
-        mock_client.get_firewall_rule.side_effect = [
-            _make_response(["1.1.1.1", "2.2.2.2"]),  # initial fetch
-            _make_response(["2.2.2.2"]),               # verification: removed
-        ]
-
-        result = unblock_ip("1.1.1.1", config, client=mock_client)
-
-        assert result == "unblocked"
-        mock_client.set_firewall_rule.assert_called_once()
-
-    def test_removes_host_name_variant(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client.delete_ip_host.return_value = None
-        mock_client.get_firewall_rule.side_effect = [
-            _make_response(["blocked-3-3-3-3"]),
-            _make_response([]),
-        ]
-
-        result = unblock_ip("3.3.3.3", config, client=mock_client)
-        assert result == "unblocked"
-
-    def test_deletes_host_object_after_removal(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client.delete_ip_host.return_value = None
-        mock_client.get_firewall_rule.side_effect = [
-            _make_response(["blocked-4-4-4-4"]),
-            _make_response([]),
-        ]
-
-        unblock_ip("4.4.4.4", config, client=mock_client)
-        mock_client.delete_ip_host.assert_called_once_with("blocked-4-4-4-4")
-
-    def test_host_delete_failure_does_not_fail_unblock(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """SFOS refusing to delete the host object (e.g. still referenced by
-        another rule) must not fail the overall unblock -- the rule change
-        already succeeded and was verified."""
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client.delete_ip_host.side_effect = FirewallAPIError(
-            "still referenced", code="502"
-        )
-        mock_client.get_firewall_rule.side_effect = [
-            _make_response(["blocked-5-5-5-5"]),
-            _make_response([]),
-        ]
-
-        result = unblock_ip("5.5.5.5", config, client=mock_client)
-        assert result == "unblocked"
-
-    def test_raises_when_still_present_after_upload(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """If SFOS reports success but the re-fetched rule still has the
-        host, unblock_ip must raise rather than report success."""
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client.get_firewall_rule.side_effect = [
-            _make_response(["blocked-6-6-6-6"]),
-            _make_response(["blocked-6-6-6-6"]),  # still present!
-        ]
-
-        with pytest.raises(RuleUpdateError, match="STILL present"):
-            unblock_ip("6.6.6.6", config, client=mock_client)
-
-    def test_missing_rule_raises_rule_update_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        bad_response = ET.fromstring(
-            "<Response><FirewallRule><Name>Other Rule</Name></FirewallRule></Response>"
-        )
-        mock_client = _mock_client(bad_response)
-
-        with pytest.raises(RuleUpdateError, match="Block IP"):
-            unblock_ip("1.1.1.1", config, client=mock_client)
-
-    def test_firewall_api_error_raises_rule_update_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client = MagicMock()
-        mock_client.last_response = ""
-        mock_client.get_firewall_rule.side_effect = FirewallAPIError(
-            "timeout", code="500"
-        )
-
-        with pytest.raises(RuleUpdateError):
-            unblock_ip("1.1.1.1", config, client=mock_client)
-
-    def test_client_is_logged_out_after_success(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        config = _make_config(monkeypatch)
-        mock_client_instance = MagicMock()
-        mock_client_instance.last_response = ""
-        mock_client_instance.set_firewall_rule.return_value = ET.fromstring("<Response/>")
-        mock_client_instance.delete_ip_host.return_value = None
-        mock_client_instance.get_firewall_rule.side_effect = [
-            _make_response(["1.1.1.1"]),
-            _make_response([]),
-        ]
-        with patch("core.rule_updater.SophosClient", return_value=mock_client_instance):
-            unblock_ip("1.1.1.1", config)  # no explicit client -- creates one
-        mock_client_instance.logout.assert_called_once()
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

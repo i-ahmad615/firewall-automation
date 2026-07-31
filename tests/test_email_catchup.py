@@ -202,7 +202,12 @@ def test_old_keyword_miss_is_updated_in_place_and_blocked(tmp_path):
 def test_catchup_records_non_write_final_results(
     tmp_path, block_result, expected_status
 ):
-    config = _config(tmp_path, allowed=("8.8.8.8",) if block_result == "allowed" else ())
+    # Origin (8.8.8.8) stays untrusted and Impacted (192.168.20.50, added by
+    # _config) is trusted, so the decision reaches "approved_for_blocking"
+    # and block_ip is actually invoked -- exercising the mocked "allowed"
+    # result as the final guard catching a candidate that became trusted
+    # between the decision and the firewall call.
+    config = _config(tmp_path)
     database.init_db(config.database_path)
     with patch("core.email_monitor.block_ip", return_value=block_result):
         _run_with_messages(config, [("8", _email(message_id=f"<{block_result}@example.com>"))])

@@ -18,7 +18,7 @@ _MODULE_CATEGORY = {
     "core.firewall_monitor": "Connectivity",
     "core.rule_updater": "Firewall Action",
     "core.xml_handler": "Firewall Action",
-    "core.manual_actions": "Firewall Action",
+    "core.retry_actions": "Retry Queue",
     "core.config": "Application",
     "web": "Application",
 }

@@ -14,7 +14,7 @@ from core.endpoint_registry import (
     clean_parsed_endpoint, decide_endpoints, infer_value_type, normalize_value, registry,
 )
 from core.rule_updater import RuleUpdateError, block_ip
-from core.manual_actions import retry_now
+from core.retry_actions import retry_now
 from core.legacy_endpoint_migration import run_legacy_endpoint_migration
 from web.routes.allowed_ips import (
     ActiveBody, EndpointBody, ImportBody, api_add_allowed_ip,
@@ -58,24 +58,27 @@ def test_invalid_values(value, kind, message):
 
 
 def test_exact_ip_cidr_and_hostname_matching():
+    """The 3 TRUSTED matching mechanisms: exact IP, IP-in-CIDR, exact hostname."""
     _add("192.168.40.25")
     _add("63.51.20.0/24")
     _add("Data-Center.Century.")
     _add("9.9.9.0/24", EXTERNAL_ALLOWLIST)
-    assert registry.classify_endpoint("192.168.40.25").is_century_owned
+    assert registry.classify_endpoint("192.168.40.25").is_trusted  # exact IP match
     assert registry.classify_endpoint("63.51.20.99").matched_type == "CIDR"
-    assert not registry.classify_endpoint("63.51.21.1").is_century_owned
-    assert registry.classify_endpoint("DATA-CENTER.CENTURY.").is_century_owned
-    assert not registry.classify_endpoint("sub.data-center.century").is_protected
-    assert registry.classify_endpoint("9.9.9.9").is_external_allowlisted
+    assert registry.classify_endpoint("63.51.20.99").is_trusted  # IP inside trusted CIDR
+    assert not registry.classify_endpoint("63.51.21.1").is_trusted  # outside the CIDR
+    assert registry.classify_endpoint("DATA-CENTER.CENTURY.").is_trusted  # exact hostname match
+    assert not registry.classify_endpoint("sub.data-center.century").is_trusted  # no wildcard match
+    assert registry.classify_endpoint("9.9.9.9").is_trusted
 
 
-def test_century_ownership_wins_over_overlapping_external_allowlist():
+def test_category_is_administrative_only_and_does_not_affect_trust():
+    """CENTURY_OWNED and EXTERNAL_ALLOWLIST both establish TRUSTED identically --
+    category is not used for the blocking decision."""
     _add("192.168.20.0/24", CENTURY_OWNED)
-    _add("192.168.20.221", EXTERNAL_ALLOWLIST)
-    item = registry.classify_endpoint("192.168.20.221")
-    assert item.is_century_owned
-    assert not item.is_external_allowlisted
+    _add("9.9.9.9", EXTERNAL_ALLOWLIST)
+    assert registry.classify_endpoint("192.168.20.5").is_trusted
+    assert registry.classify_endpoint("9.9.9.9").is_trusted
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -119,7 +122,7 @@ def test_single_ip_is_extracted_from_any_position_in_composite_field(value):
     assert item.input == value
     assert item.normalized_value == "192.168.10.249"
     assert item.value_type == "IP"
-    assert item.is_century_owned
+    assert item.is_trusted
 
 
 def test_composite_endpoint_parsing_applies_to_origin_and_impacted():
@@ -140,7 +143,7 @@ def test_repeated_same_embedded_ip_is_not_ambiguous():
     _add("192.168.10.0/24", CENTURY_OWNED)
     item = registry.classify_endpoint("pm7-itlab 192.168.10.249 192.168.10.249 (17)")
     assert item.normalized_value == "192.168.10.249"
-    assert item.is_century_owned
+    assert item.is_trusted
 
 
 def test_multiple_different_embedded_ips_are_rejected_safely():
@@ -156,26 +159,29 @@ def test_multiple_different_embedded_ips_are_rejected_safely():
     assert decision.status == "incomplete_or_invalid_endpoint"
 
 
-def test_disabled_endpoint_does_not_match_and_unknown_hostname_stays_unknown():
+def test_disabled_endpoint_does_not_match_and_stays_untrusted():
     _add("192.168.250.0/24")
     _add("mail.century", active=False)
     item = registry.classify_endpoint("mail.century")
-    assert not item.is_protected
-    assert item.ownership == "unknown"
-    assert not item.is_external_public
+    assert not item.is_trusted
+    assert item.value_type == "HOSTNAME"
+    assert item.validity == "valid"
 
 
-def test_decision_table_and_external_allowlist_separation():
+def test_decision_table_reflects_binary_trust_policy():
     _add("192.168.20.0/24")
     _add("9.9.9.9", EXTERNAL_ALLOWLIST)
     outbound = decide_endpoints("192.168.20.5", "8.8.8.8")
     inbound = decide_endpoints("8.8.8.8", "192.168.20.5")
     assert (outbound.selected_side, outbound.selected_candidate) == ("impacted", "8.8.8.8")
     assert (inbound.selected_side, inbound.selected_candidate) == ("origin", "8.8.8.8")
-    assert decide_endpoints("192.168.20.5", "192.168.20.6").status == "century_to_century"
-    assert decide_endpoints("8.8.8.8", "1.1.1.1").status == "ambiguous_external_pair"
-    assert decide_endpoints("192.168.20.5", "9.9.9.9").status == "allowlisted"
-    assert not registry.classify_endpoint("9.9.9.9").is_century_owned
+    assert decide_endpoints("192.168.20.5", "192.168.20.6").status == "both_trusted"
+    assert decide_endpoints("8.8.8.8", "1.1.1.1").status == "both_untrusted"
+    # Category no longer separates the two trusted endpoints -- both being
+    # trusted (regardless of CENTURY_OWNED vs EXTERNAL_ALLOWLIST) means
+    # neither is blocked and a review notification is sent.
+    assert decide_endpoints("192.168.20.5", "9.9.9.9").status == "both_trusted"
+    assert registry.classify_endpoint("9.9.9.9").is_trusted
 
 
 @pytest.mark.parametrize("origin,impacted,status", [
@@ -183,7 +189,7 @@ def test_decision_table_and_external_allowlist_separation():
     ("8.8.8.8", "", "incomplete_or_invalid_endpoint"),
     ("masked", "8.8.8.8", "incomplete_or_invalid_endpoint"),
     ("8.8.8.8", "8.8.8.8", "same_endpoint"),
-    ("unknown.example", "8.8.8.8", "unknown_endpoint_review"),
+    ("unknown.example", "8.8.8.8", "both_untrusted"),
 ])
 def test_non_blocking_decisions(origin, impacted, status):
     _add("192.168.250.0/24")

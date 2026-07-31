@@ -61,7 +61,7 @@ function render(data) {
   const ip = data.ip_info;
   renderKV('ip-grid', [
     ['Extracted source IP', ip.origin_ip, { copy: true }], ['Impacted IP', ip.impacted_ip, { copy: true }],
-    ['IP type', ip.ip_type], ['Public IP', ip.is_public], ['Allowlisted', ip.is_allowlisted],
+    ['IP type', ip.ip_type], ['Public IP', ip.is_public], ['Trusted', ip.is_trusted],
     ['Already blocked', ip.already_blocked], ['Sophos host object', ip.host_name],
     ['First seen', ip.first_seen, { date: true }], ['Last seen', ip.last_seen, { date: true }],
     ['Previous alerts for same IP', ip.previous_alert_count],
@@ -102,8 +102,8 @@ document.addEventListener('click', async event => {
     return;
   }
   const action = event.target.closest('[data-retry-action]');
-  if (!action || !detailData.ip_info.origin_ip) return;
-  const ip = detailData.ip_info.origin_ip;
+  if (!action || !detailData.ip_info.block_candidate) return;
+  const ip = detailData.ip_info.block_candidate;
   const kind = action.dataset.retryAction;
   const destructive = kind !== 'retry';
   const confirmed = await confirmDialog({

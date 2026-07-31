@@ -200,9 +200,6 @@ def test_main_reaches_dashboard_without_running_startup_scan_inline(monkeypatch)
         "core.legacy_endpoint_migration.run_legacy_endpoint_migration",
         lambda: {"already_applied": True},
     )
-    monkeypatch.setattr(
-        "core.rule_updater.sync_blocked_ips_from_history", lambda: 0
-    )
     monkeypatch.setattr("web.app.create_app", lambda cfg: "dashboard-app")
     monkeypatch.setattr(
         main,

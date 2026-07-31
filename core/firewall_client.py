@@ -109,9 +109,9 @@ class SophosClient:
     _per_request: bool = field(default=False, init=False, repr=False)
     _last_response: str = field(default="", init=False, repr=False)
 
-    # ──────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Private helpers
-    # ──────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @property
     def _base_url(self) -> str:
@@ -173,9 +173,9 @@ class SophosClient:
         if not self._authenticated:
             self.authenticate()
 
-    # ──────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Public interface
-    # ──────────────────────────────────────────────────────────────────
+    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def authenticate(self) -> None:
         """Authenticate and detect the SFOS auth mode (token vs per-request).
@@ -219,7 +219,7 @@ class SophosClient:
         """Create (or confirm already-existing) an IP Host object on SFOS.
 
         SFOS requires every ``<Network>`` reference in a firewall rule to be
-        the NAME of an existing IP Host object — raw IPs are rejected (501).
+        the NAME of an existing IP Host object â€” raw IPs are rejected (501).
         This creates the minimal one-IP host before the rule is updated.
 
         Parameters
@@ -274,34 +274,6 @@ class SophosClient:
             if found_name == name and (not ip or found_ip == ip):
                 return True
         return False
-
-    def delete_ip_host(self, name: str) -> None:
-        """Delete an IP Host object from SFOS.
-
-        Best-effort from the caller's perspective: SFOS rejects deleting a
-        host object that is still referenced by another rule, which surfaces
-        here as a :class:`FirewallAPIError` like any other write failure --
-        callers that only want "best effort cleanup, leave it if still in
-        use elsewhere" semantics (see ``rule_updater.unblock_ip``) should
-        catch that exception themselves rather than treating it as fatal.
-
-        Parameters
-        ----------
-        name:
-            SFOS object name, e.g. ``"blocked-69-5-169-189"``.
-        """
-        self._ensure_auth()
-        payload = (
-            "<Remove>"
-            "<IPHost>"
-            f"<Name>{name}</Name>"
-            "</IPHost>"
-            "</Remove>"
-        )
-        xml_body = self._build_request(payload)
-        root = self._send(xml_body, f"delete_ip_host({name!r})")
-        self._check_write_status(root, f"delete_ip_host({name!r})")
-        logger.debug("IP host %r deleted from SFOS", name)
 
     def get_firewall_rule(self, rule_name: str) -> ET.Element:
         """Fetch the named firewall rule from SFOS.
@@ -396,3 +368,5 @@ def ping(
             client.logout()
         except Exception:
             pass
+
+

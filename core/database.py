@@ -74,24 +74,6 @@ CREATE TABLE IF NOT EXISTS firewall_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_fw_occurred_at ON firewall_actions(occurred_at);
 
--- Currently-blocked IPs -- the single source of truth for the Manual IP
--- Unblock page. Populated by BOTH the automatic (email-driven) and manual
--- block paths (rule_updater.block_ip calls record_blocked_ip on every
--- successful block), so it reflects every IP actually blocked on the
--- firewall right now, regardless of how it got there.
-CREATE TABLE IF NOT EXISTS blocked_ips (
-    ip TEXT PRIMARY KEY,
-    host_name TEXT NOT NULL,
-    reason TEXT DEFAULT '',
-    source TEXT NOT NULL DEFAULT 'automatic',  -- automatic | manual
-    blocked_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'blocked',    -- blocked | unblocked
-    protected INTEGER NOT NULL DEFAULT 0,
-    unblocked_at TEXT,
-    unblock_source TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_blocked_ips_status ON blocked_ips(status);
-
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
@@ -312,6 +294,7 @@ def init_db(path: str) -> None:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.executescript(_SCHEMA)
         _migrate_old_endpoint_table(conn)
+        _remove_obsolete_blocked_ip_storage(conn)
         _apply_column_migrations(conn)
         _backfill_alert_processing_statuses(conn)
         conn.executescript(_POST_MIGRATION_SCHEMA)
@@ -319,6 +302,15 @@ def init_db(path: str) -> None:
     finally:
         conn.close()
     _db_path = path
+
+
+def _remove_obsolete_blocked_ip_storage(conn: sqlite3.Connection) -> None:
+    """Remove the obsolete local current-block mirror.
+
+    Firewall Actions remains the immutable audit history. Current firewall
+    state is owned by Sophos and is no longer mirrored locally.
+    """
+    conn.execute("DROP TABLE IF EXISTS blocked_ips")
 
 
 def _migrate_old_endpoint_table(conn: sqlite3.Connection) -> None:
@@ -1002,136 +994,7 @@ def record_notification(*, subject: str, recipient: str, status: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Currently-blocked IPs -- single source of truth for the Manual IP Unblock
-# page. `record_blocked_ip` is called from rule_updater.block_ip() on every
-# successful block (both automatic and manual), so this reflects every IP
-# actually blocked on the firewall, not just manually-blocked ones.
 # ──────────────────────────────────────────────────────────────────────────────
-
-def record_blocked_ip(
-    ip: str, host_name: str, *, reason: str = "", source: str = "automatic"
-) -> None:
-    """Upsert *ip* as currently blocked. Safe to call repeatedly (e.g. a
-    duplicate-detected re-block just refreshes the row)."""
-    if _db_path is None:
-        return
-    now = _utcnow()
-    with _lock, _connect() as conn:
-        conn.execute(
-            "INSERT INTO blocked_ips (ip, host_name, reason, source, blocked_at, status) "
-            "VALUES (?, ?, ?, ?, ?, 'blocked') "
-            "ON CONFLICT(ip) DO UPDATE SET "
-            "host_name = excluded.host_name, status = 'blocked', "
-            "blocked_at = excluded.blocked_at, source = excluded.source, "
-            "reason = CASE WHEN excluded.reason != '' THEN excluded.reason "
-            "ELSE blocked_ips.reason END, "
-            "unblocked_at = NULL, unblock_source = NULL",
-            (ip, host_name, reason, source, now),
-        )
-        conn.commit()
-
-
-def get_blocked_ip(ip: str) -> Optional[dict[str, Any]]:
-    """Return the blocked_ips row for *ip*, or None if it has no row at all."""
-    if _db_path is None:
-        return None
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM blocked_ips WHERE ip = ?", (ip,)).fetchone()
-    return dict(row) if row else None
-
-
-def mark_ip_unblocked(ip: str, *, source: str = "manual") -> None:
-    if _db_path is None:
-        return
-    with _lock, _connect() as conn:
-        conn.execute(
-            "UPDATE blocked_ips SET status = 'unblocked', unblocked_at = ?, "
-            "unblock_source = ? WHERE ip = ?",
-            (_utcnow(), source, ip),
-        )
-        conn.commit()
-
-
-def set_ip_protected(ip: str, protected: bool) -> bool:
-    """Set/clear the protected flag for a tracked IP. Returns True if a row
-    was updated, False if *ip* has no blocked_ips row."""
-    if _db_path is None:
-        return False
-    with _lock, _connect() as conn:
-        cursor = conn.execute(
-            "UPDATE blocked_ips SET protected = ? WHERE ip = ?", (int(protected), ip)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-
-
-def find_blocked_ips_missing_from_table() -> list[str]:
-    """Return distinct IPs with a successful 'blocked' firewall_actions row
-    but no corresponding blocked_ips row -- used once at startup to backfill
-    IPs that were already blocked before this table existed."""
-    if _db_path is None:
-        return []
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT ip FROM firewall_actions "
-            "WHERE result = 'blocked' AND status = 'success' AND ip != '' "
-            "AND ip NOT IN (SELECT ip FROM blocked_ips)"
-        ).fetchall()
-    return [r["ip"] for r in rows]
-
-
-_BLOCKED_IPS_SORT_COLUMNS = {
-    "ip", "host_name", "reason", "source", "blocked_at", "status",
-}
-
-
-def query_blocked_ips(
-    *,
-    search: str = "",
-    status: str = "blocked",
-    sort_by: str = "blocked_at",
-    sort_dir: str = "desc",
-    page: int = 1,
-    page_size: int = 25,
-) -> dict[str, Any]:
-    if _db_path is None:
-        return {"rows": [], "total": 0, "page": page, "page_size": page_size}
-
-    sort_by = sort_by if sort_by in _BLOCKED_IPS_SORT_COLUMNS else "blocked_at"
-    sort_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
-
-    where = []
-    params: list[Any] = []
-    if search:
-        where.append("(ip LIKE ? OR host_name LIKE ? OR reason LIKE ?)")
-        like = f"%{search}%"
-        params.extend([like, like, like])
-    if status:
-        where.append("status = ?")
-        params.append(status)
-
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    page = max(1, page)
-    page_size = max(1, min(page_size, 500))
-    offset = (page - 1) * page_size
-
-    with _connect() as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) c FROM blocked_ips {where_sql}", params
-        ).fetchone()["c"]
-        rows = conn.execute(
-            f"SELECT * FROM blocked_ips {where_sql} ORDER BY {sort_by} {sort_dir} "
-            f"LIMIT ? OFFSET ?",
-            [*params, page_size, offset],
-        ).fetchall()
-
-    return {
-        "rows": [dict(r) for r in rows],
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Pending blocks (retry queue for IPs that failed to block)
@@ -1257,11 +1120,15 @@ def cancel_pending_block(ip: str) -> bool:
     with _lock, _connect() as conn:
         cursor = conn.execute("DELETE FROM pending_blocks WHERE ip = ?", (ip,))
         removed = cursor.rowcount > 0
+        # Match on the actual selected block candidate (Origin or Impacted),
+        # falling back to origin_ip for rows recorded before that column
+        # existed -- never assume Origin was the retry target.
         conn.execute(
             "UPDATE alerts SET action_taken = 'removed', "
             "processing_status = 'manually_resolved', "
             "reason = 'Retry cancelled by administrator', updated_at = ? "
-            "WHERE origin_ip = ? AND action_taken = 'failed'",
+            "WHERE COALESCE(NULLIF(selected_candidate, ''), origin_ip) = ? "
+            "AND action_taken = 'failed'",
             (_utcnow(), ip),
         )
         conn.commit()
@@ -1321,6 +1188,9 @@ def resolve_pending_block(ip: str, new_result: str, notified: bool = False) -> N
     if _db_path is None:
         return
     with _lock, _connect() as conn:
+        # Match on the actual selected block candidate (Origin or Impacted),
+        # falling back to origin_ip for rows recorded before that column
+        # existed -- never assume Origin was the retry target.
         conn.execute(
             "UPDATE alerts SET action_taken = ?, reason = ?, "
             "processing_status = CASE ? "
@@ -1330,10 +1200,11 @@ def resolve_pending_block(ip: str, new_result: str, notified: bool = False) -> N
             "ELSE processing_status END, "
             "notification_sent = CASE WHEN ? THEN 1 ELSE notification_sent END, "
             "updated_at = ? "
-            "WHERE origin_ip = ? AND action_taken = 'failed'",
+            "WHERE COALESCE(NULLIF(selected_candidate, ''), origin_ip) = ? "
+            "AND action_taken = 'failed'",
             (
                 new_result,
-                f"Resolved on retry -- origin IP now {new_result}",
+                f"Resolved on retry -- candidate {ip} now {new_result}",
                 new_result,
                 int(notified),
                 _utcnow(),
@@ -1348,24 +1219,35 @@ def resolve_pending_block(ip: str, new_result: str, notified: bool = False) -> N
 
 
 def sync_pending_blocks_from_alerts() -> int:
-    """Reserve any ``failed`` alert whose IP isn't already queued for retry.
+    """Reserve any ``failed`` alert whose candidate isn't already queued for retry.
 
     Self-heals two situations: alerts that failed before the retry queue
     existed (e.g. recorded by an older version of this app), and any other
-    reason an IP marked ``failed`` fell out of sync with ``pending_blocks``.
-    Returns the number of IPs newly reserved.
+    reason a candidate marked ``failed`` fell out of sync with
+    ``pending_blocks``.
+
+    The failed candidate is ``selected_candidate`` (the actual endpoint the
+    decision engine chose to block -- Origin *or* Impacted) rather than
+    always ``origin_ip``; older rows recorded before that column existed
+    fall back to ``origin_ip``. Returns the number of candidates newly
+    reserved.
     """
     if _db_path is None:
         return 0
     with _lock, _connect() as conn:
         rows = conn.execute(
-            "SELECT a.id AS alert_id, a.origin_ip AS origin_ip, a.alarm_id AS alarm_id FROM alerts a "
+            "SELECT a.id AS alert_id, "
+            "COALESCE(NULLIF(a.selected_candidate, ''), a.origin_ip) AS candidate_ip, "
+            "a.alarm_id AS alarm_id FROM alerts a "
             "INNER JOIN ("
-            "  SELECT origin_ip, MAX(id) AS max_id FROM alerts "
+            "  SELECT COALESCE(NULLIF(selected_candidate, ''), origin_ip) AS candidate_ip, "
+            "  MAX(id) AS max_id FROM alerts "
             "  WHERE action_taken = 'failed' AND processing_status = 'processing_failed' "
-            "  AND origin_ip != '' GROUP BY origin_ip"
+            "  AND COALESCE(NULLIF(selected_candidate, ''), origin_ip) != '' "
+            "  GROUP BY candidate_ip"
             ") latest ON a.id = latest.max_id "
-            "WHERE a.origin_ip NOT IN (SELECT ip FROM pending_blocks)"
+            "WHERE COALESCE(NULLIF(a.selected_candidate, ''), a.origin_ip) "
+            "NOT IN (SELECT ip FROM pending_blocks)"
         ).fetchall()
         now = _utcnow()
         for row in rows:
@@ -1374,7 +1256,7 @@ def sync_pending_blocks_from_alerts() -> int:
                 "(ip, first_failed_at, last_attempt_at, attempts, last_error, alarm_id, alert_id) "
                 "VALUES (?, ?, ?, 0, 'Recovered from historical failure', ?, ?) "
                 "ON CONFLICT(ip) DO NOTHING",
-                (row["origin_ip"], now, now, row["alarm_id"], row["alert_id"]),
+                (row["candidate_ip"], now, now, row["alarm_id"], row["alert_id"]),
             )
         conn.commit()
         return len(rows)
@@ -1429,6 +1311,7 @@ def get_stats() -> dict[str, int]:
             "failed_blocks": 0,
             "duplicate_ips": 0,
             "allowed_ips_ignored": 0,
+            "neither_endpoint_trusted": 0,
             "firewall_rule_updates": 0,
             "total_notifications_sent": 0,
         }
@@ -1449,8 +1332,21 @@ def get_stats() -> dict[str, int]:
         duplicates = conn.execute(
             "SELECT COUNT(*) c FROM firewall_actions WHERE result='duplicate'"
         ).fetchone()["c"]
+        # "Protected Endpoints Ignored" -- both Origin and Impacted matched a
+        # trusted Protected Endpoint, so no firewall call was ever made (the
+        # binary trust decision short-circuits before block_ip is called).
+        # The alerts table's decision_status is the source of truth for this,
+        # NOT firewall_actions.result='allowed' (that column only reflects a
+        # rare race-condition guard at block time, not this common case) and
+        # NOT the old 'allowlisted'/'protected_endpoint_review' statuses,
+        # which no longer exist under the binary trust policy.
         allowed_ignored = conn.execute(
-            "SELECT COUNT(*) c FROM firewall_actions WHERE result='allowed'"
+            "SELECT COUNT(*) c FROM alerts WHERE decision_status='both_trusted' "
+            "AND action_taken='ignored'"
+        ).fetchone()["c"]
+        neither_endpoint_trusted = conn.execute(
+            "SELECT COUNT(*) c FROM alerts WHERE decision_status='both_untrusted' "
+            "AND action_taken='ignored'"
         ).fetchone()["c"]
         rule_updates = successful_blocks
         # Derived from alerts.notification_sent (not the separate `notifications`
@@ -1466,6 +1362,7 @@ def get_stats() -> dict[str, int]:
         "failed_blocks": failed_blocks,
         "duplicate_ips": duplicates,
         "allowed_ips_ignored": allowed_ignored,
+        "neither_endpoint_trusted": neither_endpoint_trusted,
         "firewall_rule_updates": rule_updates,
         "total_notifications_sent": notifications,
     }
@@ -1540,12 +1437,11 @@ _LOG_CATEGORY_MAP = {
     "core.firewall_monitor": "Connectivity",
     "core.rule_updater": "Firewall Action",
     "core.xml_handler": "Firewall Action",
-    "core.manual_actions": "Firewall Action",
+    "core.retry_actions": "Retry Queue",
     "Email": "Email Service",
     "Firewall API": "Firewall Action",
     "Firewall Rule": "Firewall Action",
     "Firewall Connectivity": "Connectivity",
-    "Manual Action": "Firewall Action",
     "Configuration": "Application",
     "Dashboard": "Application",
 }
@@ -1575,12 +1471,24 @@ def _clean_dashboard_log_row(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
+def _alert_history_row(row: sqlite3.Row) -> dict[str, Any]:
+    """Add the IP actually blocked for Alert History and exports."""
+    result = dict(row)
+    result["blocked_ip"] = ""
+    if result.get("action_taken") == "blocked" and bool(result.get("firewall_action_performed")):
+        result["blocked_ip"] = (
+            result.get("selected_candidate") or result.get("origin_ip") or ""
+        )
+    return result
+
+
 def query_alerts(
     *,
     search: str = "",
     classification: str = "",
     status: str = "",
     action_taken: str = "",
+    decision_status: str = "",
     notification_sent: Optional[bool] = None,
     sort_by: str = "received_at",
     sort_dir: str = "desc",
@@ -1597,7 +1505,10 @@ def query_alerts(
     params: list[Any] = []
     if search:
         where.append(
-            "(subject LIKE ? OR sender LIKE ? OR origin_ip LIKE ? OR classification LIKE ?)"
+            "(subject LIKE ? OR sender LIKE ? OR "
+            "(action_taken = 'blocked' AND firewall_action_performed = 1 AND "
+            "COALESCE(NULLIF(selected_candidate, ''), origin_ip) LIKE ?) OR "
+            "classification LIKE ?)"
         )
         like = f"%{search}%"
         params.extend([like, like, like, like])
@@ -1610,6 +1521,9 @@ def query_alerts(
     if action_taken:
         where.append("action_taken = ?")
         params.append(action_taken)
+    if decision_status:
+        where.append("decision_status = ?")
+        params.append(decision_status)
     if notification_sent is not None:
         where.append("notification_sent = ?")
         params.append(int(notification_sent))
@@ -1630,7 +1544,7 @@ def query_alerts(
         ).fetchall()
 
     return {
-        "rows": [dict(r) for r in rows],
+        "rows": [_alert_history_row(r) for r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -1756,6 +1670,8 @@ def all_rows(table: str) -> list[dict[str, Any]]:
     order_col = {"alerts": "received_at", "firewall_actions": "occurred_at", "logs": "timestamp"}[table]
     with _connect() as conn:
         rows = conn.execute(f"SELECT * FROM {table} ORDER BY {order_col} DESC").fetchall()
+    if table == "alerts":
+        return [_alert_history_row(r) for r in rows]
     return [dict(r) for r in rows]
 
 

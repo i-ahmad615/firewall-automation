@@ -8,6 +8,8 @@ __pycache__/
 
 # Python test, type-checker, lint, and coverage caches
 .pytest_cache/
+.pytest_*/
+.pytest_tmp*/
 .mypy_cache/
 .ruff_cache/
 .hypothesis/
@@ -39,20 +41,25 @@ dist/
 .idea/
 .claude/
 .codex/
+.agents/
 *.swp
 *.swo
 
 # Runtime data (SQLite database, session secret, IMAP/UID state)
 data/
 *.db
+*.sqlite
+*.sqlite3
 *.db-journal
 *.db-wal
 *.db-shm
+.session_secret
 allowed.txt
 
 # Application logs
 logs/
 *.log
+*.log.*
 
 # Operating-system metadata
 .DS_Store

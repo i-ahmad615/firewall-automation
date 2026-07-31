@@ -131,18 +131,6 @@ def main() -> None:
             extra={"category": "Application"},
         )
 
-    # One-time backfill: IPs blocked before the blocked_ips table existed
-    # (i.e. by an older version of this app) still need to show up on the
-    # Manual IP Unblock page.
-    from core.rule_updater import sync_blocked_ips_from_history
-    recovered = sync_blocked_ips_from_history()
-    if recovered:
-        logger.info(
-            "Recovered %d historical blocked IP record(s)",
-            recovered,
-            extra={"category": "Firewall Action"},
-        )
-
     # Re-configure with final log level from .env and enable SQLite/live logging
     configure_logging(
         log_dir=config.log_directory,

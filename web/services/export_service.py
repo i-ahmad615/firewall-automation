@@ -13,7 +13,7 @@ from core import database
 
 _TABLE_HEADERS: dict[str, list[str]] = {
     "alerts": [
-        "id", "received_at", "subject", "sender", "origin_ip", "classification",
+        "id", "received_at", "subject", "sender", "blocked_ip", "classification",
         "status", "action_taken", "reason", "notification_sent",
     ],
     "firewall_actions": [

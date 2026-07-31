@@ -14,9 +14,9 @@ import pytest
 from core.firewall_client import SophosClient, FirewallAPIError
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 AUTH_TOKEN = (
     '<Response APIVersion="2200.1" Token="abc123">'
@@ -69,9 +69,9 @@ def client() -> SophosClient:
     return SophosClient(host="192.168.1.1", port=4444, username="admin", password="pass")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # authenticate
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestAuthenticate:
     def test_stores_token_when_returned(self, client: SophosClient) -> None:
@@ -125,9 +125,9 @@ class TestAuthenticate:
         assert "<Login>" not in body
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # _check_write_status
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestCheckWriteStatus:
     def test_success_code_does_not_raise(self, client: SophosClient) -> None:
@@ -148,9 +148,9 @@ class TestCheckWriteStatus:
         client._check_write_status(root, "test")  # no raise
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # create_ip_host
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestCreateIpHost:
     HOST_OK = '<Response><IPHost transactionid=""><Status code="200">OK</Status></IPHost></Response>'
@@ -185,63 +185,9 @@ class TestCreateIpHost:
         assert "blocked-9-9-9-9" in captured[0]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# delete_ip_host
-# ──────────────────────────────────────────────────────────────────────────────
-
-class TestDeleteIpHost:
-    HOST_DELETED = '<Response><IPHost transactionid=""><Status code="200">OK</Status></IPHost></Response>'
-    HOST_IN_USE = '<Response><IPHost transactionid=""><Status code="502">Object in use</Status></IPHost></Response>'
-    HOST_FAIL = '<Response><IPHost transactionid=""><Status code="500">Error</Status></IPHost></Response>'
-
-    def test_deletes_host_successfully(self, client: SophosClient) -> None:
-        client._authenticated = True
-        client._per_request = True
-        with patch("requests.post", return_value=_mock_resp(self.HOST_DELETED)):
-            client.delete_ip_host("blocked-1-2-3-4")  # no raise
-
-    def test_tolerates_502(self, client: SophosClient) -> None:
-        """502 is globally tolerated by _check_write_status (shared with create_ip_host)."""
-        client._authenticated = True
-        client._per_request = True
-        with patch("requests.post", return_value=_mock_resp(self.HOST_IN_USE)):
-            client.delete_ip_host("blocked-1-2-3-4")  # no raise
-
-    def test_raises_on_error(self, client: SophosClient) -> None:
-        client._authenticated = True
-        client._per_request = True
-        with patch("requests.post", return_value=_mock_resp(self.HOST_FAIL)):
-            with pytest.raises(FirewallAPIError, match="code=500"):
-                client.delete_ip_host("blocked-1-2-3-4")
-
-    def test_request_contains_remove_operation_and_name(
-        self, client: SophosClient
-    ) -> None:
-        client._authenticated = True
-        client._per_request = True
-        captured: list[str] = []
-
-        def fake_post(url: str, data=None, **kw: object) -> MagicMock:
-            captured.append(data.get("reqxml", "") if data else "")
-            return _mock_resp(self.HOST_DELETED)
-
-        with patch("requests.post", side_effect=fake_post):
-            client.delete_ip_host("blocked-9-9-9-9")
-        assert "<Remove>" in captured[0]
-        assert "blocked-9-9-9-9" in captured[0]
-
-    def test_triggers_authenticate_when_not_authenticated(
-        self, client: SophosClient
-    ) -> None:
-        responses = [_mock_resp(AUTH_NO_TOKEN), _mock_resp(self.HOST_DELETED)]
-        with patch("requests.post", side_effect=responses):
-            client.delete_ip_host("blocked-1-2-3-4")
-        assert client._authenticated is True
-
-
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # get_firewall_rule
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestGetFirewallRule:
     def test_returns_response_root(self, client: SophosClient) -> None:
@@ -261,9 +207,9 @@ class TestGetFirewallRule:
         assert root.find(".//FirewallRule/Name").text == "Block IP"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # set_firewall_rule -- upload success / failure
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestSetFirewallRule:
     def test_upload_success(self, client: SophosClient) -> None:
@@ -334,9 +280,9 @@ class TestSetFirewallRule:
         assert "transactionid" not in captured[0]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # logout
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TestLogout:
     def test_resets_state(self, client: SophosClient) -> None:
@@ -352,3 +298,5 @@ class TestLogout:
         with patch("requests.post") as mock_post:
             client.logout()  # should not make any requests
         mock_post.assert_not_called()
+
+

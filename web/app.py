@@ -10,7 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from core.config import AppConfig
 
-from .routes import alert_details, allowed_ips, api, export, manual_ip_actions, pages
+from .routes import alert_details, allowed_ips, api, export, pages
 
 
 def _load_or_create_session_secret(database_path: str) -> str:
@@ -57,7 +57,6 @@ def create_app(config: AppConfig) -> FastAPI:
     app.include_router(api.router)
     app.include_router(export.router)
     app.include_router(allowed_ips.router)
-    app.include_router(manual_ip_actions.router)
     app.include_router(alert_details.router)
 
     return app

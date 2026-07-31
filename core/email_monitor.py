@@ -37,6 +37,18 @@ _IMPACTED_IP_KEYS: frozenset[str] = frozenset(
     {"impacted ip", "destination ip", "target ip", "host (impacted)"}
 )
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_UNDETERMINED_TRUST_TYPES = frozenset({"MISSING", "MASKED", "INVALID"})
+
+
+def _trust_label(classification) -> str:
+    """Human-readable trust label for notifications/dashboard display only.
+
+    This is purely cosmetic -- it never feeds back into the blocking
+    decision, which relies solely on ``EndpointClassification.is_trusted``.
+    """
+    if classification.value_type in _UNDETERMINED_TRUST_TYPES:
+        return "unknown"
+    return "trusted" if classification.is_trusted else "untrusted"
 _FINAL_PROCESSING_STATUSES: frozenset[str] = frozenset({
     "blocked_successfully",
     "already_blocked",
@@ -624,9 +636,9 @@ class EmailMonitor:
             "origin_ip": decision.origin.normalized_value if decision.origin.value_type == "IP" else origin_value,
             "impacted_ip": decision.impacted.normalized_value if decision.impacted.value_type == "IP" else impacted_value,
             "origin_original": origin_value, "origin_normalized": decision.origin.normalized_value,
-            "origin_type": decision.origin.value_type, "origin_ownership": decision.origin.ownership,
+            "origin_type": decision.origin.value_type, "origin_ownership": _trust_label(decision.origin),
             "impacted_original": impacted_value, "impacted_normalized": decision.impacted.normalized_value,
-            "impacted_type": decision.impacted.value_type, "impacted_ownership": decision.impacted.ownership,
+            "impacted_type": decision.impacted.value_type, "impacted_ownership": _trust_label(decision.impacted),
             "selected_candidate": decision.selected_candidate or "",
             "decision_status": decision.status, "decision_reason": decision.reason,
         }
@@ -651,12 +663,12 @@ class EmailMonitor:
                 self._config, notification_subject,
                 f"Alarm ID: {alarm_id or 'Unavailable'}\nOriginal Subject: {subject}\n"
                 f"Classification: {classification or ''}\nOrigin: {origin_display}\n"
-                f"Origin Ownership: {decision.origin.ownership}\nImpacted: {impacted_display}\n"
-                f"Impacted Ownership: {decision.impacted.ownership}\n\nAction Taken:\n"
+                f"Origin Trust: {_trust_label(decision.origin)}\nImpacted: {impacted_display}\n"
+                f"Impacted Trust: {_trust_label(decision.impacted)}\n\nAction Taken:\n"
                 f"No automatic firewall block was performed.\n\nReason:\n{decision.reason}\n\n"
-                "Recommended Action:\nReview the original SOC alert and endpoint ownership manually.",
+                "Recommended Action:\nReview the original SOC alert and endpoint trust status manually.",
             )
-            action = "allowed" if decision.status == "allowlisted" else "ignored"
+            action = "ignored"
             _save_result(
                 decision.status, status="processed", action_taken=action,
                 reason=decision.reason, notification_sent=notified,
@@ -672,14 +684,9 @@ class EmailMonitor:
             origin_value, impacted_value, decision.reason,
             extra={"category": "Alert Processing"},
         )
-        blocked_row = database.get_blocked_ip(candidate_ip)
-        locally_blocked = bool(
-            blocked_row and blocked_row.get("status") == "blocked"
-        )
         checks.append(_vcheck(
-            "Local block history check", not locally_blocked,
-            "Candidate is recorded as currently blocked locally" if locally_blocked
-            else "Candidate is not recorded as currently blocked locally",
+            "Firewall duplicate check", True,
+            "Sophos rule membership is checked by the shared firewall service",
         ))
 
         try:
@@ -800,8 +807,8 @@ class EmailMonitor:
             body=(
                 f"Alarm ID: {alarm_id or 'Unavailable'}\nOriginal Subject: {subject}\n"
                 f"Classification: {classification or ''}\nOrigin: {origin_value}\n"
-                f"Origin Ownership: {decision.origin.ownership}\nImpacted: {impacted_value}\n"
-                f"Impacted Ownership: {decision.impacted.ownership}\n\n"
+                f"Origin Trust: {_trust_label(decision.origin)}\nImpacted: {impacted_value}\n"
+                f"Impacted Trust: {_trust_label(decision.impacted)}\n\n"
                 f"Action Taken:\nExternal IP {candidate_ip} was blocked successfully.\n\n"
                 f"Reason:\n{decision.reason}"
             ),
