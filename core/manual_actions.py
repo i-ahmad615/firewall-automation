@@ -24,7 +24,8 @@ import logging
 from dataclasses import dataclass
 
 from . import database
-from .config import AppConfig, load_allowed_ips, is_ip_allowed
+from .config import AppConfig
+from .endpoint_registry import RegistryUnavailable, registry
 from .firewall_client import FirewallAPIError
 from .firewall_errors import firewall_exception_message
 from .rule_updater import RuleUpdateError, block_ip, unblock_ip
@@ -65,9 +66,13 @@ def validate_blockable_ip(ip: str, config: AppConfig) -> str:
     if addr.is_private:
         raise IneligibleIPError(f"{ip} is a private address and cannot be blocked")
 
-    allowed = load_allowed_ips(config.allowed_ips_file)
-    if is_ip_allowed(ip, allowed):
-        raise IneligibleIPError(f"{ip} is on the allowed IPs list and cannot be blocked")
+    try:
+        endpoint = registry.classify_endpoint(str(addr))
+    except RegistryUnavailable as exc:
+        raise IneligibleIPError(str(exc)) from exc
+    if endpoint.is_protected:
+        label = "externally allowlisted" if endpoint.is_external_allowlisted else "Century-owned"
+        raise IneligibleIPError(f"{ip} is a {label} protected endpoint and cannot be blocked")
 
     return str(addr)
 

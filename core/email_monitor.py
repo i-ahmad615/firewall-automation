@@ -21,7 +21,10 @@ from typing import Any, Iterable, Optional
 from bs4 import BeautifulSoup
 
 from . import database
-from .config import AppConfig, is_ip_allowed, load_allowed_ips
+from .config import AppConfig
+from .endpoint_registry import (
+    REGISTRY_UNAVAILABLE_MESSAGE, RegistryUnavailable, decide_endpoints,
+)
 from .email_client import EmailConnectionError, ImapMailbox, send_notification
 from .logger import SUCCESS
 from .firewall_errors import firewall_exception_message
@@ -359,6 +362,13 @@ def _vcheck(check: str, passed: bool, message: str = "", *, skipped: bool = Fals
     return {"check": check, "result": result, "message": message}
 
 
+def _parsed_endpoint(fields: dict[str, str], names: set[str]) -> str:
+    for key, value in fields.items():
+        if key.strip().lower() in names and value:
+            return value.strip()
+    return ""
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Main monitor class
 # ──────────────────────────────────────────────────────────────────────────────
@@ -573,87 +583,111 @@ class EmailMonitor:
             )
             return "no_keyword_match"
 
-        origin_ip = _extract_origin_ip_from_html(html)
+        origin_value = _parsed_endpoint(
+            parsed_fields, {"origin ip", "source ip", "host (origin)"}
+        ) or (_extract_origin_ip_from_html(html) or "")
+        impacted_value = _parsed_endpoint(
+            parsed_fields, {"impacted ip", "destination ip", "target ip", "host (impacted)"}
+        )
         try:
-            parsed_ip = ipaddress.ip_address(origin_ip) if origin_ip else None
-            valid_ip = bool(parsed_ip and parsed_ip.version == 4)
-        except ValueError:
-            parsed_ip = None
-            valid_ip = False
-        checks.append(_vcheck(
-            "IP format valid", valid_ip,
-            f"extracted {origin_ip}" if valid_ip
-            else "no valid IPv4 address found in alert body",
-        ))
-        if not valid_ip:
-            logger.warning(
-                "%s rejected | Invalid or missing origin IP",
-                alert_label,
-                extra={"category": "Alert Processing"},
+            decision = decide_endpoints(origin_value, impacted_value)
+        except RegistryUnavailable:
+            logger.warning(REGISTRY_UNAVAILABLE_MESSAGE, extra={"category": "Alert Processing"})
+            notified = _notify(
+                self._config, "[REVIEW REQUIRED] Protected endpoint registry unavailable",
+                f"Alarm ID: {alarm_id or 'Unavailable'}\nOriginal Subject: {subject}\n"
+                f"Classification: {classification or ''}\nOrigin: {origin_value or 'Unavailable'}\n"
+                f"Impacted: {impacted_value or 'Unavailable'}\n\nNo firewall action was performed.\n"
+                f"Reason: {REGISTRY_UNAVAILABLE_MESSAGE}",
             )
             _save_result(
-                "invalid_ip",
-                origin_ip=origin_ip or "",
-                status="processed",
-                action_taken="failed",
-                reason="Could not extract a valid Origin IP from alert body",
-                validation_results=json.dumps(checks),
-                validation_decision="failed_validation",
+                "protected_registry_unavailable", status="processed", action_taken="ignored",
+                reason=REGISTRY_UNAVAILABLE_MESSAGE, notification_sent=notified,
+                validation_results=json.dumps(checks), validation_decision="rejected",
+                origin_original=origin_value, impacted_original=impacted_value,
+                decision_status="protected_registry_unavailable",
+                decision_reason=REGISTRY_UNAVAILABLE_MESSAGE,
             )
-            return "invalid_ip"
+            return "protected_registry_unavailable"
 
-        origin_ip = str(parsed_ip)
-        identity_kwargs["origin_ip"] = origin_ip
+        endpoint_values = {
+            "origin_ip": decision.origin.normalized_value if decision.origin.value_type == "IP" else origin_value,
+            "impacted_ip": decision.impacted.normalized_value if decision.impacted.value_type == "IP" else impacted_value,
+            "origin_original": origin_value, "origin_normalized": decision.origin.normalized_value,
+            "origin_type": decision.origin.value_type, "origin_ownership": decision.origin.ownership,
+            "impacted_original": impacted_value, "impacted_normalized": decision.impacted.normalized_value,
+            "impacted_type": decision.impacted.value_type, "impacted_ownership": decision.impacted.ownership,
+            "selected_candidate": decision.selected_candidate or "",
+            "decision_status": decision.status, "decision_reason": decision.reason,
+        }
+        identity_kwargs.update(endpoint_values)
+        checks.append(_vcheck(
+            "Endpoint decision", decision.status == "approved_for_blocking",
+            f"{decision.status}: {decision.reason}",
+        ))
+        if decision.status != "approved_for_blocking":
+            origin_display = origin_value or "Unavailable"
+            impacted_display = impacted_value or "Unavailable"
+            logger.info(
+                "Automatic block skipped | Origin: %s | Impacted: %s | Reason: %s",
+                origin_display, impacted_display, decision.reason,
+                extra={"category": "Alert Processing"},
+            )
+            notification_subject = (
+                f"[REVIEW REQUIRED] Automatic blocking skipped - Alarm {alarm_id}"
+                if alarm_id else f"[REVIEW REQUIRED] Automatic blocking skipped - {subject}"
+            )
+            notified = _notify(
+                self._config, notification_subject,
+                f"Alarm ID: {alarm_id or 'Unavailable'}\nOriginal Subject: {subject}\n"
+                f"Classification: {classification or ''}\nOrigin: {origin_display}\n"
+                f"Origin Ownership: {decision.origin.ownership}\nImpacted: {impacted_display}\n"
+                f"Impacted Ownership: {decision.impacted.ownership}\n\nAction Taken:\n"
+                f"No automatic firewall block was performed.\n\nReason:\n{decision.reason}\n\n"
+                "Recommended Action:\nReview the original SOC alert and endpoint ownership manually.",
+            )
+            action = "allowed" if decision.status == "allowlisted" else "ignored"
+            _save_result(
+                decision.status, status="processed", action_taken=action,
+                reason=decision.reason, notification_sent=notified,
+                validation_results=json.dumps(checks), validation_decision="rejected",
+                **endpoint_values,
+            )
+            return decision.status
+
+        candidate_ip = decision.selected_candidate or ""
         logger.info(
-            "Alert matched | Keyword: %s | IP: %s",
-            matched_keyword,
-            origin_ip,
+            "External %s selected | Origin: %s | Impacted: %s | Reason: %s",
+            "destination" if decision.selected_side == "impacted" else "source",
+            origin_value, impacted_value, decision.reason,
             extra={"category": "Alert Processing"},
         )
-        logger.info(
-            "IP validation passed | IP: %s",
-            origin_ip,
-            extra={"category": "Alert Processing"},
-        )
-        is_public = not parsed_ip.is_private
-        checks.append(_vcheck(
-            "Public IP check", is_public,
-            "Origin IP is publicly routable" if is_public
-            else "Origin IP is in a private/reserved range (informational only)",
-        ))
-        allowed_set = load_allowed_ips(self._config.allowed_ips_file)
-        is_allowlisted = is_ip_allowed(origin_ip, allowed_set)
-        checks.append(_vcheck(
-            "Allowlist check", not is_allowlisted,
-            f"{origin_ip} is on the allow list" if is_allowlisted
-            else f"{origin_ip} is not on the allow list",
-        ))
-        blocked_row = database.get_blocked_ip(origin_ip)
+        blocked_row = database.get_blocked_ip(candidate_ip)
         locally_blocked = bool(
             blocked_row and blocked_row.get("status") == "blocked"
         )
         checks.append(_vcheck(
             "Local block history check", not locally_blocked,
-            "IP is recorded as currently blocked locally" if locally_blocked
-            else "IP is not recorded as currently blocked locally",
+            "Candidate is recorded as currently blocked locally" if locally_blocked
+            else "Candidate is not recorded as currently blocked locally",
         ))
 
         try:
             if processing_source == "startup_catchup":
                 result = block_ip(
-                    origin_ip,
+                    candidate_ip,
                     self._config,
                     source="startup_catchup",
                     alert_id=alert_id,
                 )
             else:
                 # Preserve the established live-monitor call contract.
-                result = block_ip(origin_ip, self._config)
+                result = block_ip(candidate_ip, self._config)
         except RuleUpdateError as exc:
             safe_reason = firewall_exception_message(exc)
             logger.error(
                 "Failed to block %s | Reason: %s",
-                origin_ip,
+                candidate_ip,
                 safe_reason,
                 extra={"category": "Firewall Action"},
             )
@@ -664,9 +698,9 @@ class EmailMonitor:
             )
             notified = _notify(
                 self._config,
-                subject=f"[ALERT] Failed to block {origin_ip}",
+                subject=f"[ALERT] Failed to block {candidate_ip}",
                 body=(
-                    f"Firewall rule update FAILED for IP {origin_ip}.\n\n"
+                    f"Firewall rule update FAILED for IP {candidate_ip}.\n\n"
                     f"Error: {safe_reason}\n\nOriginating alert: {subject}"
                 ),
             )
@@ -682,18 +716,19 @@ class EmailMonitor:
                 notification_sent=notified,
                 validation_results=json.dumps(checks),
                 validation_decision="approved",
+                **endpoint_values,
             )
             database.reserve_pending_block(
-                origin_ip, safe_reason, alarm_id=alarm_id or None, alert_id=alert_id
+                candidate_ip, safe_reason, alarm_id=alarm_id or None, alert_id=alert_id
             )
             database.record_retry_history(
-                origin_ip, attempt_number=1, status="failure", error=safe_reason,
+                candidate_ip, attempt_number=1, status="failure", error=safe_reason,
                 alert_id=alert_id,
                 source="startup_catchup" if processing_source == "startup_catchup" else "automatic",
             )
             logger.warning(
                 "Retry scheduled | IP: %s | Attempt: 1",
-                origin_ip,
+                candidate_ip,
                 extra={"category": "Retry Queue"},
             )
             return "processing_failed"
@@ -701,69 +736,76 @@ class EmailMonitor:
         if result == "allowed":
             logger.info(
                 "IP %s is allowlisted | No firewall action required",
-                origin_ip,
+                candidate_ip,
                 extra={"category": "Firewall Action"},
             )
             _save_result(
                 "allowlisted",
                 status="processed",
                 action_taken="allowed",
-                reason="Origin IP is on the allow list",
+                reason="Selected endpoint is protected by the external allowlist",
                 validation_results=json.dumps(checks),
                 validation_decision="rejected",
+                **endpoint_values,
             )
             return "allowlisted"
         if result == "duplicate":
             logger.info(
                 "IP %s is already blocked",
-                origin_ip,
+                candidate_ip,
                 extra={"category": "Firewall Action"},
             )
             checks.append(_vcheck(
                 "Duplicate check", False,
-                "Origin IP already present in firewall rule",
+                "Selected external IP already present in firewall rule",
             ))
             _save_result(
                 "already_blocked",
                 status="processed",
                 action_taken="duplicate",
-                reason="Origin IP already present in firewall rule",
+                reason="Selected external IP already present in firewall rule",
                 validation_results=json.dumps(checks),
                 validation_decision="approved",
+                **endpoint_values,
             )
             return "already_blocked"
 
         checks.append(_vcheck(
-            "Duplicate check", True, "Origin IP was not already present"
+            "Duplicate check", True, "Selected external IP was not already present"
         ))
         logger.info(
             "Blocking IP %s",
-            origin_ip,
+            candidate_ip,
             extra={"category": "Firewall Action"},
         )
         logger.log(
             SUCCESS,
             "IP %s blocked successfully",
-            origin_ip,
+            candidate_ip,
             extra={"category": "Firewall Action"},
         )
         notified = _notify(
             self._config,
-            subject=f"[BLOCKED] {origin_ip} added to firewall rule",
+            subject=f"[BLOCKED] External {'destination' if decision.selected_side == 'impacted' else 'source'} blocked - Alarm {alarm_id or subject}",
             body=(
-                f"IP {origin_ip} has been appended to the firewall rule "
-                f"'{self._config.firewall_rule_name}' and will be rejected.\n\n"
-                f"Originating alert: {subject}"
+                f"Alarm ID: {alarm_id or 'Unavailable'}\nOriginal Subject: {subject}\n"
+                f"Classification: {classification or ''}\nOrigin: {origin_value}\n"
+                f"Origin Ownership: {decision.origin.ownership}\nImpacted: {impacted_value}\n"
+                f"Impacted Ownership: {decision.impacted.ownership}\n\n"
+                f"Action Taken:\nExternal IP {candidate_ip} was blocked successfully.\n\n"
+                f"Reason:\n{decision.reason}"
             ),
         )
         _save_result(
             "blocked_successfully",
             status="processed",
             action_taken="blocked",
-            reason="Origin IP appended to firewall rule",
+            reason="Selected external IP appended to firewall rule",
             notification_sent=notified,
             validation_results=json.dumps(checks),
             validation_decision="approved",
+            firewall_action_performed=True,
+            **endpoint_values,
         )
         return "blocked_successfully"
 

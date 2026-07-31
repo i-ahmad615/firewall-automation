@@ -18,7 +18,7 @@ from core.email_monitor import EmailMonitor
 def _config(tmp_path, *, keywords=frozenset({"new-threat"}), allowed=()) -> AppConfig:
     allowed_file = tmp_path / "allowed.txt"
     allowed_file.write_text("\n".join(allowed), encoding="utf-8")
-    return AppConfig(
+    config = AppConfig(
         firewall_host="192.0.2.1",
         firewall_port=4444,
         firewall_username="admin",
@@ -43,7 +43,6 @@ def _config(tmp_path, *, keywords=frozenset({"new-threat"}), allowed=()) -> AppC
         notification_email="notify@example.com",
         trusted_senders=frozenset({"soc@example.com"}),
         alert_keywords=keywords,
-        allowed_ips_file=str(allowed_file),
         log_directory=str(tmp_path / "logs"),
         log_level="INFO",
         poll_interval=60,
@@ -52,6 +51,13 @@ def _config(tmp_path, *, keywords=frozenset({"new-threat"}), allowed=()) -> AppC
         email_lookback_hours=24,
         email_lookback_max_messages=200,
     )
+    database.init_db(config.database_path)
+    database.add_protected_endpoint(
+        "192.168.20.0/24", "192.168.20.0/24", "CIDR", "CENTURY_OWNED"
+    )
+    for value in allowed:
+        database.add_protected_endpoint(value, value, "IP", "EXTERNAL_ALLOWLIST")
+    return config
 
 
 def _email(
@@ -74,6 +80,7 @@ def _email(
         "<tr><th>Alarm ID</th><td>A-100</td></tr>"
         f"<tr><th>Classification</th><td>{classification}</td></tr>"
         f"<tr><th>Origin IP</th><td>{ip}</td></tr>"
+        "<tr><th>Impacted IP</th><td>192.168.20.50</td></tr>"
         "</table></html>",
         subtype="html",
     )

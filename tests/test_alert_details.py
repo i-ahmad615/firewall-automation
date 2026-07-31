@@ -20,7 +20,7 @@ def fake_request(tmp_path):
     allowed_path = tmp_path / "allowed.txt"
     allowed_path.write_text("", encoding="utf-8")
     config = SimpleNamespace(
-        database_path=str(db_path), allowed_ips_file=str(allowed_path), poll_interval=60,
+        database_path=str(db_path), poll_interval=60,
         admin_password="", admin_username="admin", firewall_password="fw-secret",
         email_password="mail-secret", smtp_password="smtp-secret",
     )

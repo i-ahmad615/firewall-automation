@@ -66,7 +66,6 @@ echo [5/6] Preparing configuration and runtime folders...
 if not exist "data" mkdir "data"
 if not exist "logs" mkdir "logs"
 if not exist "config" mkdir "config"
-if not exist "config\allowed_ips.txt" type nul > "config\allowed_ips.txt"
 
 set "CREATED_ENV=0"
 if not exist ".env" (

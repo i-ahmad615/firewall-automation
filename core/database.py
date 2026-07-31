@@ -169,6 +169,40 @@ CREATE TABLE IF NOT EXISTS imap_uid_checkpoints (
     updated_at TEXT NOT NULL,
     PRIMARY KEY(account_identifier, folder_name)
 );
+
+CREATE TABLE IF NOT EXISTS protected_endpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    value TEXT NOT NULL,
+    normalized_value TEXT NOT NULL UNIQUE,
+    value_type TEXT NOT NULL CHECK(value_type IN ('IP', 'CIDR', 'HOSTNAME')),
+    category TEXT NOT NULL CHECK(category IN ('CENTURY_OWNED', 'EXTERNAL_ALLOWLIST')),
+    description TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    created_by TEXT,
+    updated_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_protected_endpoints_active ON protected_endpoints(is_active);
+CREATE INDEX IF NOT EXISTS idx_protected_endpoints_category ON protected_endpoints(category);
+
+CREATE TABLE IF NOT EXISTS protected_endpoint_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint_id INTEGER,
+    endpoint_value TEXT NOT NULL,
+    category TEXT DEFAULT '',
+    action TEXT NOT NULL,
+    previous_data TEXT DEFAULT '',
+    new_data TEXT DEFAULT '',
+    actor TEXT,
+    occurred_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    detail TEXT DEFAULT ''
+);
 """
 
 # Indexes that reference columns introduced by an ALTER TABLE migration must
@@ -200,6 +234,19 @@ _COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("imap_uidvalidity", "TEXT DEFAULT ''"),
         ("processing_status", "TEXT DEFAULT 'not_processed'"),
         ("processing_source", "TEXT DEFAULT 'live_monitor'"),
+        ("impacted_ip", "TEXT DEFAULT ''"),
+        ("origin_original", "TEXT DEFAULT ''"),
+        ("origin_normalized", "TEXT DEFAULT ''"),
+        ("origin_type", "TEXT DEFAULT ''"),
+        ("origin_ownership", "TEXT DEFAULT ''"),
+        ("impacted_original", "TEXT DEFAULT ''"),
+        ("impacted_normalized", "TEXT DEFAULT ''"),
+        ("impacted_type", "TEXT DEFAULT ''"),
+        ("impacted_ownership", "TEXT DEFAULT ''"),
+        ("selected_candidate", "TEXT DEFAULT ''"),
+        ("decision_status", "TEXT DEFAULT ''"),
+        ("decision_reason", "TEXT DEFAULT ''"),
+        ("firewall_action_performed", "INTEGER NOT NULL DEFAULT 0"),
         ("updated_at", "TEXT DEFAULT ''"),
     ],
     "pending_blocks": [
@@ -264,6 +311,7 @@ def init_db(path: str) -> None:
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.executescript(_SCHEMA)
+        _migrate_old_endpoint_table(conn)
         _apply_column_migrations(conn)
         _backfill_alert_processing_statuses(conn)
         conn.executescript(_POST_MIGRATION_SCHEMA)
@@ -271,6 +319,219 @@ def init_db(path: str) -> None:
     finally:
         conn.close()
     _db_path = path
+
+
+def _migrate_old_endpoint_table(conn: sqlite3.Connection) -> None:
+    """Move the former experimental endpoint table into the sole registry."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='century_endpoints'"
+    ).fetchone()
+    if not exists:
+        return
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(century_endpoints)")}
+    category = "category" if "category" in columns else "'CENTURY_OWNED'"
+    legacy_rows = conn.execute(
+        "SELECT value, normalized_value, UPPER(entry_type) AS value_type, " + category
+        + " AS category, COALESCE(description, '') AS description, "
+        "COALESCE(active, 1) AS is_active, added_at FROM century_endpoints"
+    ).fetchall()
+    conn.execute(
+        "INSERT OR IGNORE INTO protected_endpoints "
+        "(value, normalized_value, value_type, category, description, is_active, "
+        "created_at, updated_at) SELECT value, normalized_value, UPPER(entry_type), "
+        + category + ", COALESCE(description, ''), COALESCE(active, 1), "
+        "added_at, added_at FROM century_endpoints"
+    )
+    for legacy in legacy_rows:
+        current = conn.execute(
+            "SELECT * FROM protected_endpoints WHERE normalized_value=?",
+            (legacy[1],),
+        ).fetchone()
+        if current:
+            row = dict(zip([column[0] for column in conn.execute(
+                "SELECT * FROM protected_endpoints LIMIT 0"
+            ).description], current))
+            _audit_conn(conn, row, "MIGRATED", current=row)
+    conn.execute(
+        "INSERT OR IGNORE INTO app_migrations (name, applied_at, detail) VALUES (?, ?, ?)",
+        ("protected_endpoint_table_consolidation_v1", _utcnow(), json.dumps({
+            "source": "century_endpoints", "records_preserved": len(legacy_rows)
+        })),
+    )
+    conn.execute("DROP TABLE century_endpoints")
+
+
+def list_protected_endpoints(
+    *, active_only: bool = False, category: str = "", value_type: str = "", search: str = ""
+) -> list[dict[str, Any]]:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    clauses: list[str] = []
+    params: list[Any] = []
+    if active_only:
+        clauses.append("is_active = 1")
+    if category:
+        clauses.append("category = ?")
+        params.append(category.upper())
+    if value_type:
+        clauses.append("value_type = ?")
+        params.append(value_type.upper())
+    if search:
+        clauses.append("(value LIKE ? OR normalized_value LIKE ? OR description LIKE ?)")
+        term = f"%{search}%"
+        params.extend((term, term, term))
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM protected_endpoints" + where + " ORDER BY created_at DESC, id DESC",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_protected_endpoint(entry_id: int) -> Optional[dict[str, Any]]:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM protected_endpoints WHERE id = ?", (entry_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_protected_endpoint_by_normalized(value: str) -> Optional[dict[str, Any]]:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM protected_endpoints WHERE normalized_value = ?", (value,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _audit_conn(conn, row, action: str, previous=None, current=None, actor=None) -> None:
+    conn.execute(
+        "INSERT INTO protected_endpoint_audit "
+        "(endpoint_id, endpoint_value, category, action, previous_data, new_data, actor, occurred_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (row.get("id"), row.get("value", ""), row.get("category", ""), action,
+         json.dumps(previous or {}, default=str), json.dumps(current or {}, default=str),
+         actor, _utcnow()),
+    )
+
+
+def add_protected_endpoint(value: str, normalized_value: str, value_type: str,
+                           category: str, description: str = "", *, active: bool = True,
+                           actor: Optional[str] = None, audit_action: str = "ADDED") -> Optional[int]:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    now = _utcnow()
+    with _lock, _connect() as conn:
+        try:
+            cursor = conn.execute(
+                "INSERT INTO protected_endpoints (value, normalized_value, value_type, category, "
+                "description, is_active, created_at, updated_at, created_by, updated_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (value.strip(), normalized_value, value_type.upper(), category.upper(),
+                 description.strip(), int(active), now, now, actor, actor),
+            )
+        except sqlite3.IntegrityError:
+            return None
+        row = dict(conn.execute("SELECT * FROM protected_endpoints WHERE id = ?", (cursor.lastrowid,)).fetchone())
+        _audit_conn(conn, row, audit_action, current=row, actor=actor)
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def update_protected_endpoint(entry_id: int, *, value: str, normalized_value: str,
+                              value_type: str, category: str, description: str,
+                              active: bool, actor: Optional[str] = None) -> bool:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    with _lock, _connect() as conn:
+        old = conn.execute("SELECT * FROM protected_endpoints WHERE id = ?", (entry_id,)).fetchone()
+        if not old:
+            return False
+        try:
+            conn.execute(
+                "UPDATE protected_endpoints SET value=?, normalized_value=?, value_type=?, "
+                "category=?, description=?, is_active=?, updated_at=?, updated_by=? WHERE id=?",
+                (value.strip(), normalized_value, value_type.upper(), category.upper(),
+                 description.strip(), int(active), _utcnow(), actor, entry_id),
+            )
+        except sqlite3.IntegrityError:
+            return False
+        current = dict(conn.execute("SELECT * FROM protected_endpoints WHERE id=?", (entry_id,)).fetchone())
+        _audit_conn(conn, current, "EDITED", dict(old), current, actor)
+        conn.commit()
+        return True
+
+
+def set_protected_endpoint_active(entry_id: int, active: bool, *, actor=None) -> bool:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    with _lock, _connect() as conn:
+        old = conn.execute("SELECT * FROM protected_endpoints WHERE id=?", (entry_id,)).fetchone()
+        if not old:
+            return False
+        conn.execute("UPDATE protected_endpoints SET is_active=?, updated_at=?, updated_by=? WHERE id=?",
+                     (int(active), _utcnow(), actor, entry_id))
+        current = dict(conn.execute("SELECT * FROM protected_endpoints WHERE id=?", (entry_id,)).fetchone())
+        _audit_conn(conn, current, "ENABLED" if active else "DISABLED", dict(old), current, actor)
+        conn.commit()
+        return True
+
+
+def delete_protected_endpoint(entry_id: int, *, actor=None) -> bool:
+    if _db_path is None:
+        raise RuntimeError("protected endpoint registry is unavailable")
+    with _lock, _connect() as conn:
+        old = conn.execute("SELECT * FROM protected_endpoints WHERE id=?", (entry_id,)).fetchone()
+        if not old:
+            return False
+        row = dict(old)
+        conn.execute("DELETE FROM protected_endpoints WHERE id=?", (entry_id,))
+        _audit_conn(conn, row, "DELETED", row, actor=actor)
+        conn.commit()
+        return True
+
+
+def record_endpoint_audit(action: str, *, endpoint_id=None, endpoint_value="",
+                          category="", previous_data=None, new_data=None, actor=None) -> None:
+    if _db_path is None:
+        return
+    row = {"id": endpoint_id, "value": endpoint_value, "category": category}
+    with _lock, _connect() as conn:
+        _audit_conn(conn, row, action, previous_data, new_data, actor)
+        conn.commit()
+
+
+def list_endpoint_audit(endpoint_id: Optional[int] = None) -> list[dict[str, Any]]:
+    if _db_path is None:
+        return []
+    with _connect() as conn:
+        if endpoint_id is None:
+            rows = conn.execute(
+                "SELECT * FROM protected_endpoint_audit ORDER BY occurred_at, id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM protected_endpoint_audit WHERE endpoint_id=? ORDER BY occurred_at, id",
+                (endpoint_id,),
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def migration_applied(name: str) -> bool:
+    if _db_path is None:
+        return False
+    with _connect() as conn:
+        return conn.execute("SELECT 1 FROM app_migrations WHERE name=?", (name,)).fetchone() is not None
+
+
+def finish_migration(name: str, detail: dict[str, Any]) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO app_migrations (name, applied_at, detail) VALUES (?, ?, ?)",
+                     (name, _utcnow(), json.dumps(detail)))
+        conn.commit()
 
 
 def is_initialized() -> bool:
@@ -298,6 +559,7 @@ def record_alert(
     subject: str = "",
     sender: str = "",
     origin_ip: str = "",
+    impacted_ip: str = "",
     classification: str = "",
     status: str = "processed",
     action_taken: str = "",
@@ -316,6 +578,18 @@ def record_alert(
     imap_uidvalidity: str = "",
     processing_status: str = "not_processed",
     processing_source: str = "live_monitor",
+    origin_original: str = "",
+    origin_normalized: str = "",
+    origin_type: str = "",
+    origin_ownership: str = "",
+    impacted_original: str = "",
+    impacted_normalized: str = "",
+    impacted_type: str = "",
+    impacted_ownership: str = "",
+    selected_candidate: str = "",
+    decision_status: str = "",
+    decision_reason: str = "",
+    firewall_action_performed: bool = False,
 ) -> Optional[int]:
     """Insert a new alert row. Returns its id, or None if uninitialized."""
     if _db_path is None:
@@ -323,17 +597,22 @@ def record_alert(
     now = received_at or _utcnow()
     with _lock, _connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO alerts (received_at, subject, sender, origin_ip, "
+            "INSERT INTO alerts (received_at, subject, sender, origin_ip, impacted_ip, "
             "classification, status, action_taken, reason, notification_sent, "
             "alarm_id, email_body, parsed_data, validation_results, "
             "validation_decision, message_id, imap_uid, imap_account, imap_folder, "
-            "imap_uidvalidity, processing_status, processing_source, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "imap_uidvalidity, processing_status, processing_source, "
+            "origin_original, origin_normalized, origin_type, origin_ownership, "
+            "impacted_original, impacted_normalized, impacted_type, impacted_ownership, "
+            "selected_candidate, decision_status, decision_reason, firewall_action_performed, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 now,
                 subject,
                 sender,
                 origin_ip,
+                impacted_ip,
                 classification,
                 status,
                 action_taken,
@@ -351,6 +630,18 @@ def record_alert(
                 imap_uidvalidity,
                 processing_status,
                 processing_source,
+                origin_original,
+                origin_normalized,
+                origin_type,
+                origin_ownership,
+                impacted_original,
+                impacted_normalized,
+                impacted_type,
+                impacted_ownership,
+                selected_candidate,
+                decision_status,
+                decision_reason,
+                int(firewall_action_performed),
                 now,
             ),
         )
@@ -359,12 +650,15 @@ def record_alert(
 
 
 _ALERT_UPDATE_FIELDS = frozenset({
-    "subject", "sender", "origin_ip", "classification", "status",
+    "subject", "sender", "origin_ip", "impacted_ip", "classification", "status",
     "action_taken", "reason", "notification_sent", "alarm_id",
     "email_body", "parsed_data", "validation_results",
     "validation_decision", "message_id", "imap_uid",
     "imap_account", "imap_folder", "imap_uidvalidity",
-    "processing_status", "processing_source",
+    "processing_status", "processing_source", "origin_original", "origin_normalized",
+    "origin_type", "origin_ownership", "impacted_original", "impacted_normalized",
+    "impacted_type", "impacted_ownership", "selected_candidate", "decision_status",
+    "decision_reason", "firewall_action_performed",
 })
 
 
@@ -377,6 +671,8 @@ def update_alert(alert_id: int, **values: Any) -> bool:
         return False
     if "notification_sent" in fields:
         fields["notification_sent"] = int(bool(fields["notification_sent"]))
+    if "firewall_action_performed" in fields:
+        fields["firewall_action_performed"] = int(bool(fields["firewall_action_performed"]))
     fields["updated_at"] = _utcnow()
     assignments = ", ".join(f"{name} = ?" for name in fields)
     with _lock, _connect() as conn:

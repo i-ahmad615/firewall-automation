@@ -1,43 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Allowed IPs{% endblock %}
-{% block heading %}Allowed IPs{% endblock %}
+{% block title %}Protected Endpoints{% endblock %}
+{% block heading %}Protected Endpoints{% endblock %}
 
 {% block content %}
 <section class="card panel">
   <div class="panel-header">
-    <h2>Allow List</h2>
-    <span class="hint">IP addresses below are never blocked by the firewall automation</span>
+    <div><h2>Protected Endpoint Registry</h2><span class="hint">The database is the single source for Century ownership and external allowlist protection.</span></div>
+    <div class="table-actions">
+      <input id="import-file" type="file" accept=".csv,.json" hidden>
+      <button class="btn" id="import-button" type="button">Import</button>
+      <a class="btn" href="/api/protected-endpoints/export?format=csv">Export CSV</a>
+      <a class="btn" href="/api/protected-endpoints/export?format=json">Export JSON</a>
+    </div>
   </div>
 
-  <form id="add-ip-form" class="table-toolbar" style="margin-bottom: var(--space-4)">
-    <input class="input input-search" id="new-ip" placeholder="e.g. 192.168.1.10" autocomplete="off">
-    <button class="btn btn-primary" type="submit">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
-      Add IP
-    </button>
+  <form id="endpoint-form" class="table-toolbar" style="margin-bottom: var(--space-4)">
+    <input class="input input-search" id="endpoint-value" placeholder="Endpoint value" required autocomplete="off">
+    <select class="select" id="value-type" aria-label="Entry type">
+      <option value="">Detect type</option><option value="IP">IP Address</option>
+      <option value="CIDR">CIDR Range</option><option value="HOSTNAME">Hostname</option>
+    </select>
+    <select class="select" id="endpoint-category" required aria-label="Category">
+      <option value="CENTURY_OWNED">Century-Owned</option>
+      <option value="EXTERNAL_ALLOWLIST">External Allowlist</option>
+    </select>
+    <input class="input input-search" id="endpoint-description" placeholder="Description (optional)" autocomplete="off">
+    <label><input id="endpoint-active" type="checkbox" checked> Active</label>
+    <button class="btn btn-primary" id="save-endpoint" type="submit">Add Endpoint</button>
+    <button class="btn" id="cancel-edit" type="button" hidden>Cancel</button>
   </form>
+  <div id="form-error" class="alert-banner error" hidden></div>
 
-  <div id="form-error" class="alert-banner error" style="display:none; margin-bottom: var(--space-4)"></div>
-
+  <div class="table-toolbar" style="margin-bottom: var(--space-4)">
+    <input class="input input-search" id="endpoint-search" placeholder="Search value or description...">
+    <select class="select" id="filter-category"><option value="">All categories</option>
+      <option value="CENTURY_OWNED">Century-Owned</option><option value="EXTERNAL_ALLOWLIST">External Allowlist</option>
+    </select>
+    <select class="select" id="filter-type"><option value="">All types</option>
+      <option value="IP">IP Address</option><option value="CIDR">CIDR Range</option><option value="HOSTNAME">Hostname</option>
+    </select>
+  </div>
   <div class="table-wrap">
-    <table class="data-table" id="table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>IP Address</th>
-          <th style="width: 100px">Actions</th>
-        </tr>
-      </thead>
-      <tbody id="table-body"></tbody>
-    </table>
+    <table class="data-table"><thead><tr><th>Value</th><th>Type</th><th>Category</th><th>Description</th>
+      <th>Active Status</th><th>Created Date</th><th>Updated Date</th><th>Actions</th></tr></thead>
+      <tbody id="table-body"></tbody></table>
   </div>
-
-  <div class="pagination">
-    <span id="page-info"></span>
-  </div>
+  <div class="pagination"><span id="page-info"></span></div>
 </section>
 {% endblock %}
-
-{% block scripts %}
-<script src="/static/js/allowed_ips.js"></script>
-{% endblock %}
+{% block scripts %}<script src="/static/js/allowed_ips.js"></script>{% endblock %}

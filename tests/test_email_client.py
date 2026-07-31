@@ -43,7 +43,6 @@ def _make_config() -> AppConfig:
         notification_email="security-alerts@company.com",
         trusted_senders=frozenset({"alerts@company.com"}),
         alert_keywords=frozenset({"attack"}),
-        allowed_ips_file="config/allowed_ips.txt",
         log_directory="logs",
         log_level="INFO",
         poll_interval=60,

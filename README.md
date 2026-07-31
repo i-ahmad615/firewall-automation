@@ -43,10 +43,10 @@ SOC alert email received
 Sender verified against TRUSTED_SENDERS
         │ trusted?
         ▼
-Origin IP extracted from alert HTML
+Origin and Impacted endpoints extracted from alert HTML
         │
         ▼
-IP checked against config/allowed_ips.txt (or the Allowed IPs dashboard page)
+Both endpoints classified through the database-backed Protected Endpoint Registry
         │ not whitelisted?
         ▼
 Fetch firewall rule (FIREWALL_RULE_NAME) from SFOS
@@ -124,12 +124,11 @@ In the SFOS GUI:
 2. Note its exact name (e.g. `Block IP`).
 3. Set `FIREWALL_RULE_NAME=Block IP` in `.env` to match exactly (case-sensitive).
 
-### 5. Set your allowed IPs (optional but recommended)
+### 5. Configure Protected Endpoints
 
-Edit `config/allowed_ips.txt` to list any IPs that must never be blocked
+Use the **Protected Endpoints** page to manage Century-owned and externally allowlisted endpoints.
 (internal infrastructure, monitoring tools, etc.) — one per line. You can
-also manage this list from the dashboard's **Allowed IPs** page after first
-launch.
+All entries are stored in SQLite after first launch.
 
 ### 6. Run it
 
@@ -203,9 +202,6 @@ NOTIFICATION_EMAIL=security-alerts@company.com
 TRUSTED_SENDERS=soc@centurypaper.com.pk, alerts@centurypaper.com.pk
 ALERT_KEYWORDS=attack
 
-# Allowed IPs
-ALLOWED_IPS_FILE=config/allowed_ips.txt
-
 # Logging
 LOG_DIRECTORY=logs/
 LOG_LEVEL=INFO
@@ -252,7 +248,6 @@ DASHBOARD_ADMIN_PASSWORD=
 | `SMTP_FROM` | Optional From address (defaults to `EMAIL_USERNAME`); use for shared mailbox send-as | ✓ |
 | `TRUSTED_SENDERS` | Comma-separated list of sender addresses; an email is processed if it matches any of them (case-insensitive). Legacy singular `TRUSTED_SENDER` is still accepted if this is unset | ✓ |
 | `ALERT_KEYWORDS` | Comma-separated keywords; the alert's classification must match at least one | ✓ |
-| `ALLOWED_IPS_FILE` | Path to the allowed-IP file (also editable from the Allowed IPs page) | file only |
 | `IMAP_RUN_LOOP` | `true` = poll continuously; `false` = run one cycle then exit | file only |
 | `LOG_DIRECTORY` / `LOG_LEVEL` | Production log directory and minimum operational level | file only |
 | `DEBUG_LOGGING` | Write redacted technical diagnostics to `debug.log` (default: false) | file only |
@@ -305,14 +300,14 @@ To use Gmail or another provider, change only the host/port/TLS values:
 
 ---
 
-## Allowed IP list
+## Protected Endpoint Registry
 
-Manage this list either by editing `config/allowed_ips.txt` directly, or
-from the dashboard's **Allowed IPs** page (adds/removes write straight back
+Manage this registry only through the database-backed Protected Endpoints page.
+It supports both Century-owned and external-allowlist categories. Legacy files
 to the same file — they stay in sync either way).
 
 ```
-# Internal infrastructure -- never block
+# Example endpoint values (managed in the database)
 192.168.1.10
 10.0.0.5
 172.16.20.50
@@ -368,7 +363,7 @@ Uvicorn binds to all network interfaces at `0.0.0.0:5000`.
 | **Dashboard** | Live KPI cards, a 14-day alert volume chart, an action-breakdown chart, and a real-time activity feed (via SSE). Double-clicking a KPI or a chart bar drills into the Alert History page pre-filtered. |
 | **Alert History** | Every processed SOC email — searchable, filterable, sortable, paginated, exportable to CSV/Excel, with a "Clear All" option. |
 | **Firewall Actions** | Every firewall rule update attempt (blocked/duplicate/allowed/failed) with the same search/filter/export/clear tooling. |
-| **Allowed IPs** | Add/remove IPs from the allow list; changes write directly to `config/allowed_ips.txt`. |
+| **Protected Endpoints** | Manage Century-owned and external-allowlist endpoints with CRUD, filters, import, and export. |
 | **Logs** | Structured application logs with severity/module/date/keyword filters, auto-refresh, and export. |
 | **Settings** | Edit most `.env` values through a form (secrets are masked) instead of hand-editing the file. |
 
@@ -453,7 +448,7 @@ SecurityAlertAutomation/
 
 Each backend module has exactly one responsibility. The web layer reuses
 `core/` modules directly (e.g. reading the same SQLite database and
-`allowed_ips.txt` the backend writes) rather than duplicating logic.
+the centralized Protected Endpoint Registry) rather than duplicating logic.
 
 ---
 
@@ -480,7 +475,7 @@ Each backend module has exactly one responsibility. The web layer reuses
 | --- | --- | --- |
 | Log: `sender ... is not trusted` | Email is from an address not in the trusted list | Check `TRUSTED_SENDERS` in `.env` |
 | Log: `classification ... does not match ALERT_KEYWORDS` | Alert text doesn't contain a configured keyword | Check `ALERT_KEYWORDS`, or leave broad |
-| Log: `IP ... is whitelisted` | IP is in `allowed_ips.txt` | Remove it from the Allowed IPs page/file if blocking is intended |
+| Log: `Automatic block prevented` | Endpoint is protected or the registry is unavailable | Review the Protected Endpoints page and ownership data |
 | Log: `IP ... already blocked` | IP is already in the rule | No action needed |
 | Log: `Rule ... not found` | `FIREWALL_RULE_NAME` mismatch | Copy the rule name exactly from the SFOS GUI |
 | Log: `Authentication failed` | Wrong firewall credentials | Fix `FIREWALL_USERNAME`/`FIREWALL_PASSWORD` |

@@ -12,6 +12,7 @@ from email.message import EmailMessage
 from unittest.mock import MagicMock, patch
 
 import pytest
+from core import database
 
 from core.email_monitor import (
     EmailMonitor,
@@ -41,6 +42,7 @@ ALERT_TABLE_HTML = """
 <table>
   <tr><th>Alarm ID</th><td>1234</td></tr>
   <tr><th>Origin IP</th><td>132.200.152.126</td></tr>
+  <tr><th>Impacted IP</th><td>192.168.20.50</td></tr>
   <tr><th>Classification</th><td>Threat List Attack IP</td></tr>
 </table>
 </body></html>
@@ -88,6 +90,9 @@ def _make_config(
     cfg.trusted_senders = frozenset({trusted}) if isinstance(trusted, str) else frozenset(trusted)
     cfg.alert_keywords = keywords
     cfg.firewall_rule_name = "Block IP"
+    database.add_protected_endpoint(
+        "192.168.20.0/24", "192.168.20.0/24", "CIDR", "CENTURY_OWNED"
+    )
     return cfg
 
 

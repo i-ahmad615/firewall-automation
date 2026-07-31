@@ -4,7 +4,7 @@ const STAT_DEFS = [
   { key: 'successful_blocks', label: 'Successful Blocks', tone: 'success', icon: 'shield', filter: { action_taken: 'blocked' } },
   { key: 'failed_blocks', label: 'Failed Blocks', tone: 'warning', icon: 'x', href: '/failed-ip-queue' },
   { key: 'duplicate_ips', label: 'Duplicate IPs', tone: 'neutral', icon: 'copy', filter: { action_taken: 'duplicate' } },
-  { key: 'allowed_ips_ignored', label: 'Allowed IPs Ignored', tone: 'neutral', icon: 'check', filter: { action_taken: 'allowed' } },
+  { key: 'allowed_ips_ignored', label: 'Protected Endpoints Ignored', tone: 'neutral', icon: 'check', filter: { action_taken: 'allowed' } },
   { key: 'firewall_rule_updates', label: 'Firewall Rule Updates', tone: 'primary', icon: 'refresh', filter: { action_taken: 'blocked' } },
   { key: 'total_notifications_sent', label: 'Notifications Sent', tone: 'success', icon: 'bell', filter: { notification_sent: '1' } },
 ];

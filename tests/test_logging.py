@@ -125,7 +125,7 @@ def test_successful_block_has_concise_single_business_sequence(tmp_path):
             )
 
     production = _read(log_dir / "application.log")
-    assert "Alert matched | Keyword: new-threat | IP: 8.8.8.8" in production
+    assert "External source selected | Origin: 8.8.8.8 | Impacted: 192.168.20.50" in production
     assert "Blocking IP 8.8.8.8" in production
     assert production.count("IP 8.8.8.8 blocked successfully") == 1
     assert production.count("Confirmation email sent") == 1

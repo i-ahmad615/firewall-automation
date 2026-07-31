@@ -104,6 +104,15 @@ def main() -> None:
         sys.exit(1)
 
     database.init_db(config.database_path)
+    from core.legacy_endpoint_migration import run_legacy_endpoint_migration
+    migration = run_legacy_endpoint_migration()
+    if not migration.get("already_applied"):
+        logger.info(
+            "Protected endpoint migration completed | Century-owned: %d | External allowlist: %d | Duplicates: %d | Invalid: %d | Conflicts: %d",
+            migration["imported_century_owned"], migration["imported_external_allowlist"],
+            migration["duplicates"], migration["invalid"], migration["conflicts"],
+            extra={"category": "Application"},
+        )
 
     # One-time backfill: IPs blocked before the blocked_ips table existed
     # (i.e. by an older version of this app) still need to show up on the

@@ -20,6 +20,8 @@ from core.manual_actions import (
 )
 from core.rule_updater import RuleUpdateError
 from core.firewall_client import FirewallAPIError
+from core import database
+from core.endpoint_registry import normalize_value
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -48,10 +50,15 @@ def _make_config(monkeypatch: pytest.MonkeyPatch, allowed_file: str = ""):
     from core.config import load_config
     for k, v in _ENV_BASE.items():
         monkeypatch.setenv(k, v)
+    if database.get_protected_endpoint_by_normalized("192.168.250.0/24") is None:
+        database.add_protected_endpoint(
+            "192.168.250.0/24", "192.168.250.0/24", "CIDR", "CENTURY_OWNED"
+        )
     if allowed_file:
-        monkeypatch.setenv("ALLOWED_IPS_FILE", allowed_file)
-    else:
-        monkeypatch.setenv("ALLOWED_IPS_FILE", "config/nonexistent_allowed.txt")
+        for value in open(allowed_file, encoding="utf-8").read().splitlines():
+            if value.strip():
+                normalized, kind = normalize_value(value)
+                database.add_protected_endpoint(value, normalized, kind, "EXTERNAL_ALLOWLIST")
     return load_config()
 
 

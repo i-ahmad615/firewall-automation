@@ -1,14 +1,13 @@
 """Tests for core/config.py
 
-Covers: allowed-IP loading, is_ip_allowed, load_config validation,
-        env-var parsing, and keyword parsing.
+Covers: load_config validation, env-var parsing, and keyword parsing.
 """
 from __future__ import annotations
 
 import os
 import pytest
 
-from core.config import load_allowed_ips, is_ip_allowed, load_config, parse_trusted_senders
+from core.config import load_config, parse_trusted_senders
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -41,56 +40,9 @@ def _set_full_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # load_allowed_ips
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestLoadAllowedIps:
-    def test_reads_ip_addresses(self, tmp_path: pytest.TempPathFactory) -> None:
-        f = tmp_path / "allowed.txt"
-        f.write_text("192.168.1.1\n10.0.0.5\n172.16.20.50\n")
-        result = load_allowed_ips(str(f))
-        assert result == frozenset({"192.168.1.1", "10.0.0.5", "172.16.20.50"})
-
-    def test_missing_file_returns_empty(self, tmp_path: pytest.TempPathFactory) -> None:
-        result = load_allowed_ips(str(tmp_path / "does_not_exist.txt"))
-        assert result == frozenset()
-
-    def test_comments_are_ignored(self, tmp_path: pytest.TempPathFactory) -> None:
-        f = tmp_path / "allowed.txt"
-        f.write_text("# this is a comment\n1.2.3.4\n")
-        result = load_allowed_ips(str(f))
-        assert "1.2.3.4" in result
-        assert not any(r.startswith("#") for r in result)
-
-    def test_blank_lines_are_ignored(self, tmp_path: pytest.TempPathFactory) -> None:
-        f = tmp_path / "allowed.txt"
-        f.write_text("\n\n1.2.3.4\n\n")
-        result = load_allowed_ips(str(f))
-        assert result == frozenset({"1.2.3.4"})
-
-    def test_empty_file_returns_empty(self, tmp_path: pytest.TempPathFactory) -> None:
-        f = tmp_path / "allowed.txt"
-        f.write_text("")
-        result = load_allowed_ips(str(f))
-        assert result == frozenset()
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # is_ip_allowed
 # ──────────────────────────────────────────────────────────────────────────────
-
-class TestIsIpAllowed:
-    ALLOWED = frozenset({"192.168.1.10", "10.0.0.5"})
-
-    def test_listed_ip_returns_true(self) -> None:
-        assert is_ip_allowed("192.168.1.10", self.ALLOWED) is True
-
-    def test_unlisted_ip_returns_false(self) -> None:
-        assert is_ip_allowed("8.8.8.8", self.ALLOWED) is False
-
-    def test_empty_set_always_false(self) -> None:
-        assert is_ip_allowed("1.2.3.4", frozenset()) is False
-
-    def test_strips_whitespace_from_ip(self) -> None:
-        assert is_ip_allowed("  192.168.1.10  ", self.ALLOWED) is True
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # load_config
@@ -303,14 +255,12 @@ class TestLoadConfig:
         """Verify all env vars are correctly mapped to AppConfig fields."""
         _set_full_env(monkeypatch)
         monkeypatch.setenv("NOTIFICATION_EMAIL", "notify@example.com")
-        monkeypatch.setenv("ALLOWED_IPS_FILE", "config/allowed_ips.txt")
         monkeypatch.setenv("LOG_DIRECTORY", "logs/")
         monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("IMAP_POLL_INTERVAL", "120")
         monkeypatch.setenv("IMAP_RUN_LOOP", "true")
         cfg = load_config()
         assert cfg.notification_email == "notify@example.com"
-        assert cfg.allowed_ips_file == "config/allowed_ips.txt"
         assert cfg.log_level == "DEBUG"
         assert cfg.poll_interval == 120
         assert cfg.run_loop is True

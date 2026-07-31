@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from core import database
-from core.config import is_ip_allowed, load_allowed_ips
+from core.endpoint_registry import RegistryUnavailable, registry
 from core.email_monitor import sanitize_email_html
 from core.xml_handler import make_host_name
 
@@ -150,8 +150,10 @@ def api_get_alert_detail(alert_id: int, request: Request):
             ip_info["is_public"] = not addr.is_private
         except ValueError:
             pass
-        allowed_set = load_allowed_ips(config.allowed_ips_file)
-        ip_info["is_allowlisted"] = is_ip_allowed(ip, allowed_set)
+        try:
+            ip_info["is_allowlisted"] = registry.is_external_allowlisted(ip)
+        except RegistryUnavailable:
+            ip_info["is_allowlisted"] = None
         blocked_row = database.get_blocked_ip(ip)
         ip_info["already_blocked"] = bool(blocked_row and blocked_row.get("status") == "blocked")
         ip_info["host_name"] = make_host_name(ip)

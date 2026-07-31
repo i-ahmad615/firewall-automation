@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from . import database
-from .config import AppConfig, load_allowed_ips, is_ip_allowed
+from .config import AppConfig
+from .endpoint_registry import REGISTRY_UNAVAILABLE_MESSAGE, RegistryUnavailable, registry
 from .firewall_client import SophosClient, FirewallAPIError
 from .firewall_errors import firewall_exception_message
 from .xml_handler import (
@@ -108,20 +109,28 @@ def block_ip(
     request_started_at = _utcnow()
 
     # ── 1. Allowlist check ────────────────────────────────────────────
-    allowed_set = load_allowed_ips(config.allowed_ips_file)
-    if is_ip_allowed(ip, allowed_set):
+    try:
+        candidate = registry.classify_endpoint(ip)
+    except RegistryUnavailable as exc:
+        logger.warning(REGISTRY_UNAVAILABLE_MESSAGE)
+        raise RuleUpdateError(REGISTRY_UNAVAILABLE_MESSAGE) from exc
+    if candidate.is_protected:
         logger.info(
-            "IP %s is whitelisted in %s -- no action taken",
-            ip, config.allowed_ips_file,
+            "Automatic block prevented | Candidate: %s | Reason: Protected endpoint",
+            ip,
         )
         database.record_firewall_action(
             ip=ip, rule_name=rule_name, result="allowed",
             allowed_list=True, status="success",
-            detail=f"IP is whitelisted in {config.allowed_ips_file}",
+            detail=f"Protected by registry category {candidate.matched_category}",
             source=source, reason=reason, alert_id=alert_id,
             request_started_at=request_started_at,
         )
         return "allowed"
+    if candidate.value_type != "IP" or not candidate.is_external_public:
+        message = "Only a validated, unprotected external public IP may be blocked"
+        logger.warning("Automatic block prevented | Candidate: %s | Reason: %s", ip, message)
+        raise RuleUpdateError(message)
 
     # ── 2-6. Firewall interaction ─────────────────────────────────────
     own_client = client is None

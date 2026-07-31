@@ -77,7 +77,6 @@ class AppConfig:
     alert_keywords: FrozenSet[str]
 
     # Paths / behaviour
-    allowed_ips_file: str
     log_directory: str
     log_level: str
     poll_interval: int
@@ -320,9 +319,6 @@ def load_config() -> AppConfig:
         notification_email=notification_email,
         trusted_senders=trusted_senders,
         alert_keywords=keywords,
-        allowed_ips_file=os.environ.get(
-            "ALLOWED_IPS_FILE", "config/allowed_ips.txt"
-        ).strip(),
         log_directory=os.environ.get("LOG_DIRECTORY", "logs").strip(),
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
         debug_logging=_env_bool("DEBUG_LOGGING", "false"),
@@ -346,19 +342,3 @@ def load_config() -> AppConfig:
 # Allowed-IP helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_allowed_ips(path: str) -> FrozenSet[str]:
-    """Return the set of IPs that must never be blocked."""
-    p = Path(path)
-    if not p.exists():
-        return frozenset()
-    allowed: set[str] = set()
-    for line in p.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            allowed.add(stripped)
-    return frozenset(allowed)
-
-
-def is_ip_allowed(ip: str, allowed: FrozenSet[str]) -> bool:
-    """Return True if *ip* is whitelisted and must NOT be blocked."""
-    return ip.strip() in allowed
