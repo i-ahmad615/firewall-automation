@@ -3,10 +3,9 @@
 Run with:
     python main.py
 
-Starts the email/firewall monitoring service in a background thread, then
-starts the integrated web dashboard (FastAPI + uvicorn) in the foreground,
-opening the user's default browser automatically. No separate frontend
-process or build step is required.
+Starts the integrated web dashboard immediately, while email startup scanning,
+monitoring, retries, and connectivity checks run in background threads. No
+separate frontend process or build step is required.
 """
 from __future__ import annotations
 
@@ -28,9 +27,27 @@ from core.logger import configure_logging
 
 
 def _run_monitor(config) -> None:
+    """Run startup email recovery, then hand ownership to live monitoring."""
     logger = logging.getLogger(__name__)
+    monitor = EmailMonitor(config)
     try:
-        EmailMonitor(config).start()
+        logger.info(
+            "Starting email startup scan",
+            extra={"category": "Application"},
+        )
+        monitor.run_startup_scan()
+    except Exception:
+        logger.error(
+            "Startup email scan failed | Live monitoring will continue",
+            extra={"category": "Email Service"},
+        )
+        logger.debug(
+            "Startup email scan background failure",
+            exc_info=True,
+            extra={"technical": True},
+        )
+    try:
+        monitor.start()
     except Exception:
         logger.exception("Email monitor thread crashed")
 
@@ -137,14 +154,13 @@ def main() -> None:
     logger.info("Configuration loaded", extra={"category": "Application"})
     logger.debug(
         "Runtime configuration | firewall=%s:%s rule=%r | imap=%s:%s | "
-        "catchup=%dh/%d | smtp=%s:%s | dashboard=%s:%s",
+        "startup_limit=%d | smtp=%s:%s | dashboard=%s:%s",
         config.firewall_host,
         config.firewall_port,
         config.firewall_rule_name,
         config.imap_host,
         config.imap_port,
-        config.email_lookback_hours,
-        config.email_lookback_max_messages,
+        config.imap_startup_email_limit,
         config.smtp_host,
         config.smtp_port,
         config.dashboard_host,
@@ -152,14 +168,22 @@ def main() -> None:
         extra={"technical": True},
     )
 
-    # Bounded, synchronous startup recovery. Failure is intentionally
-    # non-fatal: live monitoring and the dashboard still start when IMAP or
-    # Sophos is temporarily unavailable.
-    logger.info(
-        "Starting bounded email catch-up scan",
-        extra={"category": "Application"},
+    # Create the dashboard and schedule the browser before starting any email
+    # work. IMAP startup scanning can be slow or unavailable, but it must never
+    # delay dashboard availability.
+    from web.app import create_app
+
+    app = create_app(config)
+    dashboard_url = _dashboard_browser_url(
+        config.dashboard_host, config.dashboard_port
     )
-    EmailMonitor(config).run_startup_catchup()
+    if config.auto_open_browser:
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(dashboard_url,),
+            name="dashboard-browser",
+            daemon=True,
+        ).start()
 
     monitor_thread = threading.Thread(
         target=_run_monitor, args=(config,), name="email-monitor", daemon=True
@@ -190,14 +214,6 @@ def main() -> None:
         extra={"technical": True},
     )
 
-    dashboard_url = _dashboard_browser_url(
-        config.dashboard_host, config.dashboard_port
-    )
-    if config.auto_open_browser:
-        threading.Thread(
-            target=_open_browser_when_ready, args=(dashboard_url,), daemon=True
-        ).start()
-
     logger.info("Application services started", extra={"category": "Application"})
     logger.info(
         "Dashboard listening | Bind: %s:%d",
@@ -207,9 +223,6 @@ def main() -> None:
     )
     logger.debug("Web dashboard endpoint: %s", dashboard_url, extra={"technical": True})
 
-    from web.app import create_app
-
-    app = create_app(config)
     try:
         _run_dashboard(app, config.dashboard_host, config.dashboard_port)
     except KeyboardInterrupt:

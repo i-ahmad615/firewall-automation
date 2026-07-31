@@ -85,10 +85,8 @@ class AppConfig:
     debug_log_max_chars: int = 2000
     database_path: str = "data/app.db"
     firewall_ping_interval: int = 60
-    email_lookback_hours: int = 24
-    email_lookback_max_messages: int = 200
     imap_folders: tuple[str, ...] = ("INBOX",)
-    imap_uid_reconcile_count: int = 20
+    imap_startup_email_limit: int = 10
 
     # Dashboard
     dashboard_host: str = "0.0.0.0"
@@ -290,14 +288,8 @@ def load_config() -> AppConfig:
             "FIREWALL_RULE_NAME", os.environ["FIREWALL_RULE_NAME"]
         ),
         firewall_ping_interval=firewall_ping_interval,
-        email_lookback_hours=_env_positive_int_or_default(
-            "EMAIL_LOOKBACK_HOURS", 24
-        ),
-        email_lookback_max_messages=_env_positive_int_or_default(
-            "EMAIL_LOOKBACK_MAX_MESSAGES", 200
-        ),
-        imap_uid_reconcile_count=_env_positive_int_or_default(
-            "IMAP_UID_RECONCILE_COUNT", 20
+        imap_startup_email_limit=_env_positive_int_or_default(
+            "IMAP_STARTUP_EMAIL_LIMIT", 10
         ),
         imap_folders=imap_folders,
         imap_host=_validate_non_empty("IMAP_HOST", os.environ["IMAP_HOST"]),

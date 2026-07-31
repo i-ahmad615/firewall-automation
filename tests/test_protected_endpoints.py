@@ -107,6 +107,55 @@ def test_origin_and_impacted_counts_use_cleaned_values_for_decision():
     assert inbound.selected_side == "origin"
 
 
+@pytest.mark.parametrize("value", [
+    "192.168.10.249 pm7-itlab (17)",
+    "pm7-itlab 192.168.10.249 (17)",
+    "pm7-itlab (17) 192.168.10.249",
+    "device=pm7-itlab ip=192.168.10.249 (25)",
+])
+def test_single_ip_is_extracted_from_any_position_in_composite_field(value):
+    _add("192.168.10.0/24", CENTURY_OWNED)
+    item = registry.classify_endpoint(value)
+    assert item.input == value
+    assert item.normalized_value == "192.168.10.249"
+    assert item.value_type == "IP"
+    assert item.is_century_owned
+
+
+def test_composite_endpoint_parsing_applies_to_origin_and_impacted():
+    _add("192.168.10.0/24", CENTURY_OWNED)
+    outbound = decide_endpoints(
+        "pm7-itlab 192.168.10.249 (17)",
+        "destination 8.8.8.8 (4)",
+    )
+    inbound = decide_endpoints(
+        "source 1.1.1.1 (3)",
+        "pm7-itlab 192.168.10.249 (17)",
+    )
+    assert (outbound.selected_side, outbound.selected_candidate) == ("impacted", "8.8.8.8")
+    assert (inbound.selected_side, inbound.selected_candidate) == ("origin", "1.1.1.1")
+
+
+def test_repeated_same_embedded_ip_is_not_ambiguous():
+    _add("192.168.10.0/24", CENTURY_OWNED)
+    item = registry.classify_endpoint("pm7-itlab 192.168.10.249 192.168.10.249 (17)")
+    assert item.normalized_value == "192.168.10.249"
+    assert item.is_century_owned
+
+
+def test_multiple_different_embedded_ips_are_rejected_safely():
+    _add("192.168.10.0/24", CENTURY_OWNED)
+    item = registry.classify_endpoint("pm7-itlab 192.168.10.249 gateway 192.168.10.1 (17)")
+    decision = decide_endpoints(
+        "pm7-itlab 192.168.10.249 gateway 192.168.10.1 (17)",
+        "8.8.8.8",
+    )
+    assert item.input == "pm7-itlab 192.168.10.249 gateway 192.168.10.1 (17)"
+    assert item.value_type == "INVALID"
+    assert "Multiple different IP" in item.reason
+    assert decision.status == "incomplete_or_invalid_endpoint"
+
+
 def test_disabled_endpoint_does_not_match_and_unknown_hostname_stays_unknown():
     _add("192.168.250.0/24")
     _add("mail.century", active=False)

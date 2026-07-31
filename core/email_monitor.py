@@ -382,9 +382,7 @@ class EmailMonitor:
             f"{config.email_username.strip().lower()}|"
             f"{config.imap_host.strip().lower()}:{config.imap_port}"
         )
-        self._needs_uid_reconciliation = True
         self._imap_connected: Optional[bool] = None
-        self._volatile_uid_checkpoints: dict[tuple[str, str], int] = {}
 
     def _process_message(
         self,
@@ -399,7 +397,7 @@ class EmailMonitor:
         imap_uidvalidity: str = "",
         stored_email_id: Optional[int] = None,
     ) -> str:
-        """Process one message through the shared live/catch-up pipeline."""
+        """Process one message through the shared live/startup pipeline."""
         headers = _parse_headers(raw)
         subject = headers.get("subject", "")
         from_header = headers.get("from", "")
@@ -421,7 +419,7 @@ class EmailMonitor:
                 imap_account,
                 imap_uidvalidity,
             )
-        if existing_alert is None and processing_source == "startup_catchup":
+        if existing_alert is None and processing_source == "startup_scan":
             existing_alert = database.find_legacy_alert(
                 subject=subject,
                 sender=from_header,
@@ -432,6 +430,18 @@ class EmailMonitor:
         previous_status = (
             (existing_alert or {}).get("processing_status") or "not_processed"
         )
+        if existing_alert and database.has_active_retry_for_alert(existing_alert.get("id")):
+            database.update_stored_email(
+                stored_email_id,
+                processing_status=previous_status,
+                alert_id=existing_alert.get("id"),
+            )
+            logger.debug(
+                "uid=%s message_id=%s: skipped because retry queue owns alert",
+                uid,
+                message_id or "<missing>",
+            )
+            return "skipped:active_retry"
         if existing_alert and previous_status in _FINAL_PROCESSING_STATUSES:
             database.update_stored_email(
                 stored_email_id,
@@ -673,11 +683,11 @@ class EmailMonitor:
         ))
 
         try:
-            if processing_source == "startup_catchup":
+            if processing_source == "startup_scan":
                 result = block_ip(
                     candidate_ip,
                     self._config,
-                    source="startup_catchup",
+                    source="startup_scan",
                     alert_id=alert_id,
                 )
             else:
@@ -724,7 +734,7 @@ class EmailMonitor:
             database.record_retry_history(
                 candidate_ip, attempt_number=1, status="failure", error=safe_reason,
                 alert_id=alert_id,
-                source="startup_catchup" if processing_source == "startup_catchup" else "automatic",
+                source="startup_scan" if processing_source == "startup_scan" else "automatic",
             )
             logger.warning(
                 "Retry scheduled | IP: %s | Attempt: 1",
@@ -809,120 +819,143 @@ class EmailMonitor:
         )
         return "blocked_successfully"
 
-    def run_startup_catchup(self) -> dict[str, int]:
-        """Run one bounded, status-aware historical scan before live polling."""
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            hours=self._config.email_lookback_hours
-        )
+    def run_startup_scan(self) -> dict[str, int]:
+        """Check only the latest configured messages in every IMAP folder."""
         summary = {"fetched": 0, "processed": 0, "skipped": 0, "failed": 0}
         mailbox = ImapMailbox(self._config)
-        try:
-            mailbox.connect()
-            messages = mailbox.fetch_recent(
-                cutoff,
-                self._config.trusted_senders,
-                self._config.email_lookback_max_messages,
-            )
-            summary["fetched"] = len(messages)
-        except EmailConnectionError as exc:
-            logger.warning(
-                "Startup catch-up unavailable | Email service connection failed",
-                extra={"category": "Email Service"},
-            )
-            logger.debug("Catch-up IMAP error: %s", exc, extra={"technical": True})
-            mailbox.disconnect()
-            return summary
-        except Exception as exc:
-            logger.error(
-                "Startup catch-up failed while retrieving email",
-                extra={"category": "Email Service"},
-            )
-            logger.exception(
-                "Technical catch-up retrieval failure: %s",
-                exc,
-                extra={"technical": True},
-            )
-            mailbox.disconnect()
-            return summary
-
         seen_identities: set[str] = set()
         try:
-            for message in messages:
-                uid, raw = message[0], message[1]
-                internal_received = message[2] if len(message) > 2 else None
-                headers = _parse_headers(raw)
-                message_id = _normalize_message_id(headers.get("message_id", ""))
-                identity = f"message-id:{message_id}" if message_id else f"uid:{uid}"
-                received_dt = internal_received or _received_datetime(
-                    headers.get("date", "")
-                )
-                if received_dt and received_dt < cutoff:
-                    logger.debug(
-                        "Catch-up skipped uid=%s outside exact lookback cutoff", uid
-                    )
-                    summary["skipped"] += 1
-                    continue
-                if identity in seen_identities:
-                    logger.debug("Catch-up skipped duplicate %s", identity)
-                    summary["skipped"] += 1
-                    continue
-                seen_identities.add(identity)
+            mailbox.connect()
+        except EmailConnectionError as exc:
+            logger.warning(
+                "Startup email scan unavailable | Email service connection failed",
+                extra={"category": "Email Service"},
+            )
+            logger.debug("Startup IMAP error: %s", exc, extra={"technical": True})
+            mailbox.disconnect()
+            return summary
 
-                html = _extract_html(raw)
-                origin_ip = _extract_origin_ip_from_html(html or "") or ""
+        try:
+            for folder in self._config.imap_folders:
                 try:
-                    result = self._process_message(
-                        uid,
-                        raw,
-                        processing_source="startup_catchup",
-                        received_at=received_dt.isoformat() if received_dt else None,
-                    )
-                except Exception as exc:
+                    state = mailbox.select_folder(folder)
+                    observed_uids = mailbox.search_uids_since(1)
+                except Exception:
                     summary["failed"] += 1
-                    failed_alert = database.find_alert_by_message_identity(
-                        message_id, uid
-                    )
-                    if failed_alert:
-                        database.update_alert(
-                            failed_alert["id"],
-                            processing_status="processing_failed",
-                            status="processed",
-                            action_taken="failed",
-                            reason=str(exc),
-                            processing_source="startup_catchup",
-                        )
                     logger.error(
-                        "Startup catch-up failed for historical alert | IP: %s",
-                        origin_ip or "unknown",
-                        extra={"category": "Alert Processing"},
+                        "Startup email scan failed | Folder: %s",
+                        folder,
+                        extra={"category": "Email Service"},
                     )
-                    logger.exception(
-                        "Catch-up technical failure | Message-ID=%s UID=%s IP=%s error=%s",
-                        message_id or "<missing>", uid, origin_ip or "<unknown>", exc,
+                    logger.debug(
+                        "Startup folder scan failure | folder=%r",
+                        folder,
+                        exc_info=True,
                         extra={"technical": True},
                     )
                     continue
-                if result.startswith("skipped:"):
-                    summary["skipped"] += 1
-                    continue
-                summary["processed"] += 1
-                processed_alert = database.find_alert_by_message_identity(
-                    message_id, uid
+
+                numeric_uids = sorted(
+                    {uid for uid in observed_uids if str(uid).isdigit()}, key=int
                 )
-                label = (
-                    f"Alert #{processed_alert['id']}" if processed_alert else "Alert"
+                selected_uids = numeric_uids[-self._config.imap_startup_email_limit:]
+                highest_observed = int(numeric_uids[-1]) if numeric_uids else 0
+
+                for uid in selected_uids:
+                    stored_email_id: Optional[int] = None
+                    message_id = ""
+                    try:
+                        raw = mailbox.fetch_message_peek(uid)
+                        stored_email_id, _ = database.store_fetched_email(
+                            self._imap_account,
+                            folder,
+                            state.uidvalidity,
+                            uid,
+                            raw,
+                        )
+                        summary["fetched"] += 1
+                        headers = _parse_headers(raw)
+                        message_id = _normalize_message_id(
+                            headers.get("message_id", "")
+                        )
+                        identity = (
+                            f"message-id:{message_id}"
+                            if message_id
+                            else f"uid:{folder}:{state.uidvalidity}:{uid}"
+                        )
+                        if identity in seen_identities:
+                            summary["skipped"] += 1
+                            continue
+                        seen_identities.add(identity)
+                        result = self._process_message(
+                            uid,
+                            raw,
+                            processing_source="startup_scan",
+                            imap_account=self._imap_account,
+                            imap_folder=folder,
+                            imap_uidvalidity=state.uidvalidity,
+                            stored_email_id=stored_email_id,
+                        )
+                    except Exception:
+                        summary["failed"] += 1
+                        failed_alert = database.find_alert_by_message_identity(
+                            message_id,
+                            uid,
+                            folder,
+                            self._imap_account,
+                            state.uidvalidity,
+                        )
+                        if failed_alert:
+                            database.update_alert(
+                                failed_alert["id"],
+                                processing_status="processing_failed",
+                                status="processed",
+                                action_taken="failed",
+                                reason="Startup email processing failed unexpectedly",
+                                processing_source="startup_scan",
+                            )
+                        if stored_email_id is not None:
+                            database.update_stored_email(
+                                stored_email_id,
+                                processing_status="processing_failed",
+                                alert_id=(failed_alert or {}).get("id"),
+                            )
+                        logger.error(
+                            "Startup email processing failed | Folder: %s | UID: %s",
+                            folder,
+                            uid,
+                            extra={"category": "Alert Processing"},
+                        )
+                        logger.debug(
+                            "Startup message failure | folder=%r uid=%s",
+                            folder,
+                            uid,
+                            exc_info=True,
+                            extra={"technical": True},
+                        )
+                        continue
+                    if result.startswith("skipped:"):
+                        summary["skipped"] += 1
+                    else:
+                        summary["processed"] += 1
+
+                # Startup establishes the generation and checkpoint even when
+                # every selected message was already final or retry-owned.
+                database.reset_uid_checkpoint(
+                    self._imap_account, folder, state.uidvalidity
                 )
-                logger.info(
-                    "%s processed through startup catch-up scan | Result: %s",
-                    label,
-                    result,
-                    extra={"category": "Alert Processing"},
-                )
+                if highest_observed:
+                    database.advance_uid_checkpoint(
+                        self._imap_account,
+                        folder,
+                        state.uidvalidity,
+                        highest_observed,
+                    )
         finally:
             mailbox.disconnect()
 
         logger.info(
-            "Startup catch-up completed | Checked: %d | Processed: %d | Skipped: %d | Failed: %d",
+            "Startup email scan completed | Checked: %d | Processed: %d | Skipped: %d | Failed: %d",
             summary["fetched"],
             summary["processed"],
             summary["skipped"],
@@ -1018,13 +1051,6 @@ class EmailMonitor:
         """Fetch, durably store, then process new UIDs from one folder."""
         state = mailbox.select_folder(folder)
         checkpoint = database.get_uid_checkpoint(self._imap_account, folder)
-        volatile_key = (folder, state.uidvalidity)
-        if checkpoint is None and volatile_key in self._volatile_uid_checkpoints:
-            checkpoint = {
-                "uidvalidity": state.uidvalidity,
-                "last_fetched_uid": self._volatile_uid_checkpoints[volatile_key],
-            }
-
         validity_changed = bool(
             checkpoint and str(checkpoint.get("uidvalidity", "")) != state.uidvalidity
         )
@@ -1042,21 +1068,16 @@ class EmailMonitor:
         else:
             last_uid = int(checkpoint.get("last_fetched_uid") or 0)
 
-        reconcile = self._needs_uid_reconciliation or validity_changed or checkpoint is None
-        first_uid = (
-            max(1, last_uid - self._config.imap_uid_reconcile_count + 1)
-            if reconcile and last_uid
-            else max(1, last_uid + 1)
-        )
-        uids = mailbox.search_uids_since(first_uid)
-        if reconcile and not last_uid:
-            uids = uids[-self._config.imap_uid_reconcile_count:]
-        elif not reconcile:
-            # Some IMAP servers treat ``333:*`` as the reversed inclusive
-            # range ``332:333`` when 332 is currently the highest UID. Never
-            # trust the server-side range alone: normal polling must accept
-            # only UIDs strictly newer than the durable checkpoint.
-            uids = [uid for uid in uids if int(uid) > last_uid]
+        uids = mailbox.search_uids_since(max(1, last_uid + 1))
+        # Some IMAP servers treat ``333:*`` as the reversed inclusive range
+        # ``332:333`` when 332 is currently highest. Enforce the checkpoint
+        # locally so runtime monitoring processes only strictly newer UIDs.
+        uids = [uid for uid in uids if uid.isdigit() and int(uid) > last_uid]
+        if not last_uid:
+            # Startup normally creates the checkpoint. If startup could not
+            # connect, or UIDVALIDITY changed later, recover with the same
+            # bounded latest-N policy rather than scanning the full mailbox.
+            uids = sorted(set(uids), key=int)[-self._config.imap_startup_email_limit:]
 
         newly_stored = 0
         for uid in uids:
@@ -1074,9 +1095,6 @@ class EmailMonitor:
                 folder,
                 state.uidvalidity,
                 int(uid),
-            )
-            self._volatile_uid_checkpoints[volatile_key] = max(
-                int(uid), self._volatile_uid_checkpoints.get(volatile_key, 0)
             )
             if inserted:
                 newly_stored += 1
@@ -1127,7 +1145,6 @@ class EmailMonitor:
                     extra={"category": "Email Service"},
                 )
             self._imap_connected = True
-            self._needs_uid_reconciliation = False
             if fetched:
                 logger.info(
                     "IMAP poll completed | Status: connected | New emails found: %d",
@@ -1147,7 +1164,6 @@ class EmailMonitor:
                     extra={"category": "Email Service"},
                 )
             self._imap_connected = False
-            self._needs_uid_reconciliation = True
             logger.debug(
                 "IMAP polling failure",
                 exc_info=True,

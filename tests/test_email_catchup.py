@@ -1,7 +1,7 @@
 """Bounded startup email catch-up and status-aware idempotency tests."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import format_datetime
 import sqlite3
@@ -11,7 +11,7 @@ import pytest
 
 from core import database
 from core.config import AppConfig
-from core.email_client import ImapMailbox
+from core.email_client import ImapFolderState, ImapMailbox
 from core.email_monitor import EmailMonitor
 
 
@@ -48,8 +48,7 @@ def _config(tmp_path, *, keywords=frozenset({"new-threat"}), allowed=()) -> AppC
         poll_interval=60,
         run_loop=True,
         database_path=str(tmp_path / "catchup.db"),
-        email_lookback_hours=24,
-        email_lookback_max_messages=200,
+        imap_startup_email_limit=10,
     )
     database.init_db(config.database_path)
     database.add_protected_endpoint(
@@ -89,63 +88,80 @@ def _email(
 
 def _run_with_messages(config: AppConfig, messages):
     mailbox = MagicMock()
-    mailbox.fetch_recent.return_value = messages
+    mailbox.select_folder.return_value = ImapFolderState("INBOX", "1")
+    mailbox.search_uids_since.return_value = [str(message[0]) for message in messages]
+    raw_by_uid = {str(message[0]): message[1] for message in messages}
+    mailbox.fetch_message_peek.side_effect = lambda uid: raw_by_uid[str(uid)]
     with patch("core.email_monitor.ImapMailbox", return_value=mailbox):
         with patch("core.email_monitor._notify", return_value=False):
-            summary = EmailMonitor(config).run_startup_catchup()
+            summary = EmailMonitor(config).run_startup_scan()
     mailbox.connect.assert_called_once_with()
     mailbox.disconnect.assert_called_once_with()
     return summary
 
 
-def test_fetch_recent_includes_read_mail_without_changing_seen_flag(tmp_path):
+def test_startup_fetch_uses_body_peek_without_changing_seen_flag(tmp_path):
     config = _config(tmp_path)
     mailbox = ImapMailbox(config)
     conn = MagicMock()
-    conn.select.return_value = ("OK", [b"1"])
-    conn.uid.side_effect = [
-        ("OK", [b"41"]),
-        ("OK", [(b"41 (BODY[] {3})", b"raw")]),
-    ]
+    conn.uid.return_value = ("OK", [(b"41 (BODY[] {3})", b"raw")])
     mailbox._conn = conn
 
-    result = mailbox.fetch_recent(
-        datetime.now(timezone.utc) - timedelta(hours=24),
-        config.trusted_senders,
-        200,
-    )
+    result = mailbox.fetch_message_peek("41")
 
-    assert result == [("41", b"raw", None)]
-    conn.select.assert_called_once_with("INBOX", readonly=True)
-    assert conn.uid.call_args_list[0].args[0] == "SEARCH"
-    assert "UNSEEN" not in conn.uid.call_args_list[0].args
-    assert conn.uid.call_args_list[1].args == (
-        "FETCH", "41", "(BODY.PEEK[] INTERNALDATE)"
-    )
+    assert result == b"raw"
+    conn.uid.assert_called_once_with("FETCH", "41", "(BODY.PEEK[])")
     assert not any(call.args and call.args[0] == "STORE" for call in conn.uid.call_args_list)
 
 
-def test_fetch_recent_enforces_newest_message_limit(tmp_path):
-    config = _config(tmp_path)
-    mailbox = ImapMailbox(config)
-    conn = MagicMock()
-    conn.select.return_value = ("OK", [b"4"])
-    conn.uid.side_effect = [
-        ("OK", [b"1 2 3 4"]),
-        ("OK", [(b"3", b"raw-3")]),
-        ("OK", [(b"4", b"raw-4")]),
-    ]
-    mailbox._conn = conn
-
-    result = mailbox.fetch_recent(
-        datetime.now(timezone.utc) - timedelta(hours=24),
-        config.trusted_senders,
-        2,
+def test_startup_scan_enforces_latest_n_and_processes_oldest_to_newest(tmp_path):
+    config = __import__("dataclasses").replace(
+        _config(tmp_path), imap_startup_email_limit=2
     )
+    messages = [
+        (str(uid), _email(message_id=f"<{uid}@example.com>", ip=f"8.8.8.{uid}"))
+        for uid in range(1, 5)
+    ]
+    mailbox = MagicMock()
+    mailbox.select_folder.return_value = ImapFolderState("INBOX", "9")
+    mailbox.search_uids_since.return_value = ["4", "2", "1", "3"]
+    raw_by_uid = {uid: raw for uid, raw in messages}
+    mailbox.fetch_message_peek.side_effect = lambda uid: raw_by_uid[uid]
+    monitor = EmailMonitor(config)
+    with patch("core.email_monitor.ImapMailbox", return_value=mailbox):
+        with patch.object(monitor, "_process_message", return_value="processed") as process:
+            summary = monitor.run_startup_scan()
 
-    assert result == [("3", b"raw-3", None), ("4", b"raw-4", None)]
-    search_args = conn.uid.call_args_list[0].args
-    assert search_args[-2:] == ("FROM", "soc@example.com")
+    assert [call.args[0] for call in process.call_args_list] == ["3", "4"]
+    assert summary["fetched"] == 2
+    checkpoint = database.get_uid_checkpoint(monitor._imap_account, "INBOX")
+    assert checkpoint["last_fetched_uid"] == 4
+
+
+def test_startup_limit_is_applied_to_each_configured_folder(tmp_path):
+    config = __import__("dataclasses").replace(
+        _config(tmp_path),
+        imap_folders=("INBOX", "SOC"),
+        imap_startup_email_limit=1,
+    )
+    mailbox = MagicMock()
+    mailbox.select_folder.side_effect = [
+        ImapFolderState("INBOX", "11"),
+        ImapFolderState("SOC", "22"),
+    ]
+    mailbox.search_uids_since.side_effect = [["1", "2"], ["8", "9"]]
+    mailbox.fetch_message_peek.side_effect = [
+        _email(message_id="<inbox-2@example.com>"),
+        _email(message_id="<soc-9@example.com>"),
+    ]
+    monitor = EmailMonitor(config)
+    with patch("core.email_monitor.ImapMailbox", return_value=mailbox):
+        with patch.object(monitor, "_process_message", return_value="processed") as process:
+            monitor.run_startup_scan()
+
+    assert [call.args[0] for call in process.call_args_list] == ["2", "9"]
+    assert database.get_uid_checkpoint(monitor._imap_account, "INBOX")["last_fetched_uid"] == 2
+    assert database.get_uid_checkpoint(monitor._imap_account, "SOC")["last_fetched_uid"] == 9
 
 
 def test_old_keyword_miss_is_updated_in_place_and_blocked(tmp_path):
@@ -172,7 +188,7 @@ def test_old_keyword_miss_is_updated_in_place_and_blocked(tmp_path):
     assert summary == {"fetched": 1, "processed": 1, "skipped": 0, "failed": 0}
     assert row["processing_status"] == "blocked_successfully"
     assert row["action_taken"] == "blocked"
-    assert row["processing_source"] == "startup_catchup"
+    assert row["processing_source"] == "startup_scan"
     assert row["message_id"] == "<missed@example.com>"
     assert row["imap_uid"] == "7"
     assert row["received_at"] == original_received
@@ -205,17 +221,17 @@ def test_duplicate_message_id_is_processed_only_once(tmp_path):
     assert summary["skipped"] == 1
 
 
-def test_message_outside_exact_lookback_is_skipped(tmp_path):
+def test_latest_message_is_processed_regardless_of_received_date(tmp_path):
     config = _config(tmp_path)
     database.init_db(config.database_path)
     raw = _email(
         message_id="<old@example.com>",
-        received=datetime.now(timezone.utc) - timedelta(hours=25),
+        received=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
-    with patch("core.email_monitor.block_ip") as block:
+    with patch("core.email_monitor.block_ip", return_value="blocked") as block:
         summary = _run_with_messages(config, [("12", raw)])
-    block.assert_not_called()
-    assert summary["skipped"] == 1
+    block.assert_called_once()
+    assert summary["processed"] == 1
 
 
 def test_untrusted_sender_is_rejected_even_if_server_returns_it(tmp_path):
@@ -270,7 +286,7 @@ def test_final_status_message_is_idempotently_skipped(tmp_path):
     assert summary["skipped"] == 1
 
 
-def test_catchup_writes_required_processing_log(tmp_path, caplog):
+def test_startup_scan_writes_one_summary_log(tmp_path, caplog):
     config = _config(tmp_path)
     database.init_db(config.database_path)
     with caplog.at_level("INFO"):
@@ -278,9 +294,32 @@ def test_catchup_writes_required_processing_log(tmp_path, caplog):
             _run_with_messages(config, [("17", _email(message_id="<logged@example.com>"))])
     matching = [
         record.getMessage() for record in caplog.records
-        if "processed through startup catch-up scan" in record.getMessage()
+        if "Startup email scan completed" in record.getMessage()
     ]
     assert len(matching) == 1
+
+
+def test_active_retry_job_owns_processing_during_startup(tmp_path):
+    config = _config(tmp_path)
+    alert_id = database.record_alert(
+        message_id="<retry-owned@example.com>",
+        origin_ip="8.8.8.8",
+        processing_status="processing_failed",
+        action_taken="failed",
+    )
+    database.reserve_pending_block(
+        "8.8.8.8", "Firewall unavailable", alert_id=alert_id
+    )
+
+    with patch("core.email_monitor.block_ip") as block:
+        summary = _run_with_messages(
+            config,
+            [("18", _email(message_id="<retry-owned@example.com>"))],
+        )
+
+    block.assert_not_called()
+    assert summary["skipped"] == 1
+    assert database.get_alert(alert_id)["processing_status"] == "processing_failed"
 
 
 def test_legacy_database_keyword_miss_is_backfilled_as_reprocessable(tmp_path):

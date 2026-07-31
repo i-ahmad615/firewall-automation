@@ -12,9 +12,8 @@ import re
 import smtplib
 import ssl
 from dataclasses import dataclass
-from datetime import datetime
 from email.message import EmailMessage
-from typing import Iterable, Optional
+from typing import Optional
 
 from .config import AppConfig
 from . import email_status
@@ -22,24 +21,6 @@ from . import email_status
 logger = logging.LoggerAdapter(logging.getLogger(__name__), {"technical": True})
 
 _DEFAULT_TIMEOUT = 30
-_INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"', re.IGNORECASE)
-
-
-def _parse_internaldate(fetch_metadata: object) -> Optional[datetime]:
-    """Parse an IMAP FETCH INTERNALDATE value when the server provides it."""
-    if not isinstance(fetch_metadata, bytes):
-        return None
-    match = _INTERNALDATE_RE.search(fetch_metadata)
-    if not match:
-        return None
-    try:
-        return datetime.strptime(
-            match.group(1).decode("ascii"), "%d-%b-%Y %H:%M:%S %z"
-        )
-    except (UnicodeDecodeError, ValueError):
-        return None
-
-
 class EmailConnectionError(Exception):
     """Raised when IMAP or SMTP connection/authentication fails."""
 
@@ -248,76 +229,6 @@ class ImapMailbox:
                     results.append((uid, part[1]))
                     break
         logger.debug("IMAP: fetched %d unread message(s) from %s", len(results), mailbox)
-        return results
-
-    def fetch_recent(
-        self,
-        since: datetime,
-        trusted_senders: Iterable[str],
-        max_messages: int,
-    ) -> list[tuple[str, bytes, Optional[datetime]]]:
-        """Return recent messages from trusted senders without changing flags.
-
-        IMAP's ``SINCE`` criterion is date-granular, so the caller performs
-        the exact hour-level cutoff using FETCH ``INTERNALDATE`` (falling back
-        to the message Date header if a server omits it). Searches are issued
-        per trusted sender and their UID results are de-duplicated.
-        ``BODY.PEEK[]`` plus a read-only mailbox selection preserves the
-        existing read/unread state.
-        """
-        if self._conn is None:
-            raise EmailConnectionError("IMAP not connected")
-        mailbox = self._config.imap_mailbox
-        typ, _ = self._conn.select(mailbox, readonly=True)
-        if typ != "OK":
-            raise EmailConnectionError(f"IMAP failed to select mailbox {mailbox!r}")
-
-        since_text = since.strftime("%d-%b-%Y")
-        found: set[str] = set()
-        for sender in sorted({value.strip() for value in trusted_senders if value.strip()}):
-            typ, data = self._conn.uid(
-                "SEARCH", None, "SINCE", since_text, "FROM", sender
-            )
-            if typ != "OK":
-                logger.warning(
-                    "IMAP catch-up search failed for trusted sender %s: %s",
-                    sender,
-                    typ,
-                )
-                continue
-            if data and data[0]:
-                for raw_uid in data[0].split():
-                    found.add(
-                        raw_uid.decode() if isinstance(raw_uid, bytes) else str(raw_uid)
-                    )
-
-        def _uid_order(value: str) -> tuple[int, str]:
-            try:
-                return (int(value), value)
-            except ValueError:
-                return (-1, value)
-
-        # Select the newest bounded set, then process it oldest-to-newest.
-        selected = sorted(found, key=_uid_order, reverse=True)[:max_messages]
-        selected.reverse()
-        results: list[tuple[str, bytes, Optional[datetime]]] = []
-        for uid in selected:
-            typ, msg_data = self._conn.uid(
-                "FETCH", uid, "(BODY.PEEK[] INTERNALDATE)"
-            )
-            if typ != "OK":
-                logger.warning("IMAP catch-up failed to fetch uid=%s", uid)
-                continue
-            for part in msg_data:
-                if isinstance(part, tuple) and len(part) >= 2:
-                    results.append((uid, part[1], _parse_internaldate(part[0])))
-                    break
-        logger.info(
-            "IMAP catch-up fetched %d trusted message(s) since %s (limit=%d)",
-            len(results),
-            since.isoformat(),
-            max_messages,
-        )
         return results
 
     def mark_seen(self, uid: str) -> None:

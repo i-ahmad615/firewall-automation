@@ -4,7 +4,7 @@
 
 {% macro field(key, spec) %}
   <div class="field-group">
-    <label for="{{ key }}">{{ key.replace('_', ' ').title() }}</label>
+    <label for="{{ key }}">{{ spec.label }}</label>
     {% if spec.type == 'bool' %}
       <div class="field-check">
         <input type="checkbox" id="{{ key }}" name="{{ key }}" {% if spec.value.lower() == 'true' %}checked{% endif %}>
@@ -20,7 +20,7 @@
       <input class="input" type="password" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}" autocomplete="new-password">
       <span class="field-hint">Leave as-is to keep the current value unchanged.</span>
     {% elif spec.type == 'number' %}
-      <input class="input" type="number" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}">
+      <input class="input" type="number" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}" {% if key == 'IMAP_STARTUP_EMAIL_LIMIT' %}min="1" step="1" required{% endif %}>
     {% else %}
       <input class="input" type="text" id="{{ key }}" name="{{ key }}" value="{{ spec.value }}">
     {% endif %}

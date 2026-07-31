@@ -42,13 +42,13 @@ CREATE TABLE IF NOT EXISTS alerts (
     parsed_data TEXT DEFAULT '',         -- JSON dict of every key/value row found in the alert email's table(s)
     validation_results TEXT DEFAULT '',  -- JSON list of {check, result, message}
     validation_decision TEXT DEFAULT '', -- approved | ignored | rejected | failed_validation
-    message_id TEXT DEFAULT '',           -- RFC Message-ID; preferred catch-up identity
+    message_id TEXT DEFAULT '',           -- RFC Message-ID; preferred email identity
     imap_uid TEXT DEFAULT '',             -- IMAP UID fallback when Message-ID is absent
     imap_account TEXT DEFAULT '',
     imap_folder TEXT DEFAULT '',
     imap_uidvalidity TEXT DEFAULT '',
     processing_status TEXT DEFAULT 'not_processed',
-    processing_source TEXT DEFAULT 'live_monitor', -- live_monitor | startup_catchup
+    processing_source TEXT DEFAULT 'live_monitor', -- live_monitor | startup_scan
     updated_at TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_received_at ON alerts(received_at);
@@ -1207,6 +1207,18 @@ def get_pending_block(ip: str) -> Optional[dict[str, Any]]:
     entry["active"] = bool(entry.get("active", 1))
     entry["status"] = _pending_status(entry["ip"]) if entry["active"] else "paused"
     return entry
+
+
+def has_active_retry_for_alert(alert_id: Optional[int]) -> bool:
+    """Return whether the retry queue currently owns an alert's firewall action."""
+    if _db_path is None or alert_id is None:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pending_blocks WHERE alert_id = ? AND active != 0 LIMIT 1",
+            (alert_id,),
+        ).fetchone()
+    return row is not None
 
 
 def record_retry_attempt(ip: str, error: str) -> None:

@@ -266,15 +266,13 @@ class TestLoadConfig:
         assert cfg.run_loop is True
 
     @pytest.mark.parametrize("raw", ["invalid", "0", "-5", ""])
-    def test_invalid_email_lookback_uses_safe_defaults(
+    def test_invalid_startup_email_limit_uses_safe_default(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:
         _set_full_env(monkeypatch)
-        monkeypatch.setenv("EMAIL_LOOKBACK_HOURS", raw)
-        monkeypatch.setenv("EMAIL_LOOKBACK_MAX_MESSAGES", raw)
+        monkeypatch.setenv("IMAP_STARTUP_EMAIL_LIMIT", raw)
         cfg = load_config()
-        assert cfg.email_lookback_hours == 24
-        assert cfg.email_lookback_max_messages == 200
+        assert cfg.imap_startup_email_limit == 10
 
     def test_debug_logging_defaults_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_full_env(monkeypatch)
@@ -292,20 +290,14 @@ class TestLoadConfig:
         assert cfg.debug_logging is True
         assert cfg.debug_log_max_chars == 750
 
-    def test_imap_folders_and_reconcile_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_imap_folders_and_startup_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_full_env(monkeypatch)
         monkeypatch.setenv("IMAP_FOLDERS", "INBOX, SOC Alerts,INBOX")
-        monkeypatch.setenv("IMAP_UID_RECONCILE_COUNT", "35")
+        monkeypatch.setenv("IMAP_STARTUP_EMAIL_LIMIT", "35")
         cfg = load_config()
         assert cfg.imap_folders == ("INBOX", "SOC Alerts")
         assert cfg.imap_mailbox == "INBOX"
-        assert cfg.imap_uid_reconcile_count == 35
-
-    def test_invalid_reconcile_count_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_full_env(monkeypatch)
-        monkeypatch.setenv("IMAP_UID_RECONCILE_COUNT", "invalid")
-        cfg = load_config()
-        assert cfg.imap_uid_reconcile_count == 20
+        assert cfg.imap_startup_email_limit == 35
 
 
 # ──────────────────────────────────────────────────────────────────────────────

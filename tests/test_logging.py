@@ -167,7 +167,7 @@ def test_failed_block_logs_error_and_retry_once(tmp_path):
     assert production.count("Retry scheduled | IP: 8.8.8.8 | Attempt: 1") == 1
 
 
-def test_startup_catchup_has_one_summary_and_no_skip_noise(tmp_path):
+def test_startup_scan_has_one_summary_and_no_skip_noise(tmp_path):
     log_dir = _configure(tmp_path)
     config = _config(tmp_path)
     database.init_db(config.database_path)
@@ -185,7 +185,7 @@ def test_startup_catchup_has_one_summary_and_no_skip_noise(tmp_path):
     _run_with_messages(config, messages)
 
     production = _read(log_dir / "application.log")
-    assert production.count("Startup catch-up completed") == 1
+    assert production.count("Startup email scan completed") == 1
     assert "Checked: 3 | Processed: 0 | Skipped: 3 | Failed: 0" in production
     assert "skipped final status" not in production
     assert "Message-ID" not in production

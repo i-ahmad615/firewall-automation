@@ -138,11 +138,10 @@ python main.py
 
 That single command:
 
-1. Runs one bounded, status-aware email catch-up scan covering recent read and unread mail.
-2. Starts the normal live email monitor and existing firewall retry processing.
-3. Starts the firewall connectivity monitor in the background.
-3. Starts the web dashboard.
-4. Opens your default browser to the dashboard automatically.
+1. Starts the web dashboard and opens it in your default browser.
+2. Checks the latest configured number of emails in each IMAP folder in the background.
+3. Starts normal live email monitoring and retry processing after the startup scan.
+4. Starts firewall and email connectivity monitoring in the background.
 
 No second terminal, no `npm run`, no separate frontend process.
 
@@ -185,7 +184,7 @@ IMAP_USE_SSL=true
 IMAP_USE_STARTTLS=false
 IMAP_MAILBOX=INBOX
 IMAP_FOLDERS=INBOX
-IMAP_UID_RECONCILE_COUNT=20
+IMAP_STARTUP_EMAIL_LIMIT=10
 EMAIL_USERNAME=monitor@company.com
 EMAIL_PASSWORD=your_password
 
@@ -211,8 +210,6 @@ DEBUG_LOG_MAX_CHARS=2000
 # Polling
 IMAP_POLL_INTERVAL=60
 IMAP_RUN_LOOP=true
-EMAIL_LOOKBACK_HOURS=24
-EMAIL_LOOKBACK_MAX_MESSAGES=200
 
 # Database
 DATABASE_PATH=data/app.db
@@ -238,9 +235,7 @@ DASHBOARD_ADMIN_PASSWORD=
 | `EMAIL_USERNAME` / `EMAIL_PASSWORD` | Mailbox credentials used to read alerts | ✓ |
 | `IMAP_POLL_INTERVAL` | Seconds between IMAP polls (default: 60) | ✓ |
 | `IMAP_FOLDERS` | Comma-separated folders monitored by durable UID checkpoints (default: INBOX) | file only |
-| `IMAP_UID_RECONCILE_COUNT` | Recent UIDs rechecked after startup or reconnect (default: 20) | file only |
-| `EMAIL_LOOKBACK_HOURS` | Startup catch-up window in hours; invalid values fall back to 24 | file only |
-| `EMAIL_LOOKBACK_MAX_MESSAGES` | Maximum trusted messages examined during startup; invalid values fall back to 200 | file only |
+| `IMAP_STARTUP_EMAIL_LIMIT` | Latest emails checked per configured folder at startup (default: 10) | ✓ |
 | `SMTP_HOST` / `SMTP_PORT` | SMTP server for sending notifications | ✓ |
 | `SMTP_USE_TLS` | `true` for STARTTLS (port 587 — Outlook); mutually exclusive with `SMTP_USE_SSL` | ✓ |
 | `SMTP_USE_SSL` | `true` for implicit SSL (port 465) | ✓ |

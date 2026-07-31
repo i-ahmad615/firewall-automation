@@ -31,6 +31,7 @@ _FIELDS: list[tuple[str, str, str, bool]] = [
     ("imap", "EMAIL_USERNAME", "text", False),
     ("imap", "EMAIL_PASSWORD", "password", True),
     ("imap", "IMAP_POLL_INTERVAL", "number", False),
+    ("imap", "IMAP_STARTUP_EMAIL_LIMIT", "number", False),
     ("imap", "TRUSTED_SENDERS", "text", False),
     ("imap", "ALERT_KEYWORDS", "text", False),
     # SMTP
@@ -65,6 +66,7 @@ _DEFAULTS: dict[str, str] = {
     "IMAP_MAILBOX": "INBOX",
     "IMAP_TIMEOUT": "30",
     "IMAP_POLL_INTERVAL": "60",
+    "IMAP_STARTUP_EMAIL_LIMIT": "10",
     "FIREWALL_PING_INTERVAL": "60",
     "SMTP_TIMEOUT": "30",
     "DASHBOARD_HOST": "0.0.0.0",
@@ -74,6 +76,9 @@ _DEFAULTS: dict[str, str] = {
 
 # Extra guidance shown under specific fields in the form.
 _HINTS: dict[str, str] = {
+    "IMAP_STARTUP_EMAIL_LIMIT": (
+        "Latest emails checked in each configured folder when the application starts."
+    ),
     "TRUSTED_SENDERS": (
         "Comma-separated list of trusted sender email addresses, e.g. "
         "soc@company.com, alerts@company.com"
@@ -82,6 +87,10 @@ _HINTS: dict[str, str] = {
         "Use 0.0.0.0 to make the dashboard available to other devices on "
         "the same network."
     ),
+}
+
+_LABELS: dict[str, str] = {
+    "IMAP_STARTUP_EMAIL_LIMIT": "Startup Email Limit",
 }
 
 
@@ -110,6 +119,7 @@ def load_settings() -> dict[str, dict[str, Any]]:
             "is_secret": is_secret,
             "choices": None,
             "hint": _HINTS.get(key),
+            "label": _LABELS.get(key, key.replace("_", " ").title()),
         }
     return sections
 
@@ -153,9 +163,12 @@ def save_settings(form: dict[str, str]) -> list[str]:
             continue
         if field_type == "number":
             try:
-                int(value)
+                numeric_value = int(value)
             except ValueError:
                 errors.append(f"{key} must be a whole number, got {value!r}")
+                continue
+            if key == "IMAP_STARTUP_EMAIL_LIMIT" and numeric_value <= 0:
+                errors.append("Startup Email Limit must be a positive integer")
                 continue
         updates[key] = value
 

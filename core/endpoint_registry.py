@@ -20,6 +20,9 @@ _HOSTNAME = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
     r"(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", re.I
 )
+_EMBEDDED_IPV4 = re.compile(
+    r"(?<![0-9A-Za-z_./:])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z_./:])"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +73,37 @@ def clean_parsed_endpoint(value: str) -> str:
     silently rewritten.
     """
     return re.sub(r"\s+\(\d+\)$", "", value.strip())
+
+
+def _embedded_ip_candidates(value: str) -> list[str]:
+    """Return the distinct valid IPs embedded in a composite endpoint field.
+
+    Values such as ``pm7-itlab 192.168.10.249`` occur in SOC fields.  An IP
+    is accepted only as a separately delimited value.  Repeated occurrences
+    of the same IP are collapsed; multiple different IPs remain ambiguous.
+    """
+    candidates: list[str] = []
+
+    def add(candidate: str) -> None:
+        try:
+            normalized = str(ipaddress.ip_address(candidate))
+        except ValueError:
+            return
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    for match in _EMBEDDED_IPV4.finditer(value):
+        add(match.group(0))
+
+    # IPv6 has several valid compressed forms, so the standard library is
+    # used to validate delimited tokens instead of duplicating its grammar.
+    for token in value.split():
+        candidate = token.strip("[](){}<>,;'\"")
+        if candidate.lower().startswith(("ip=", "ip:")):
+            candidate = candidate[3:]
+        if ":" in candidate:
+            add(candidate)
+    return candidates
 
 
 def infer_value_type(value: str) -> str:
@@ -190,6 +224,16 @@ class ProtectedEndpointRegistry:
             address = ipaddress.ip_address(cleaned)
         except ValueError:
             address = None
+        if address is None:
+            embedded_ips = _embedded_ip_candidates(cleaned)
+            if len(embedded_ips) > 1:
+                return self._plain(
+                    raw, cleaned, "INVALID", "invalid",
+                    "Multiple different IP addresses found in endpoint field",
+                )
+            if embedded_ips:
+                cleaned = embedded_ips[0]
+                address = ipaddress.ip_address(cleaned)
         if address is not None:
             normalized = str(address)
             match = self.match_endpoint(normalized)

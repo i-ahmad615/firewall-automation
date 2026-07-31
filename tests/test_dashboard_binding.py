@@ -67,6 +67,29 @@ def test_settings_page_persists_dashboard_host_and_port(tmp_path, monkeypatch):
     assert displayed["DASHBOARD_PORT"]["value"] == "5000"
 
 
+def test_settings_page_saves_and_reloads_startup_email_limit(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("IMAP_STARTUP_EMAIL_LIMIT=10\n", encoding="utf-8")
+    monkeypatch.setattr(settings_service, "_ENV_PATH", str(env_path))
+
+    assert settings_service.save_settings({"IMAP_STARTUP_EMAIL_LIMIT": "25"}) == []
+    assert read_env_pairs(str(env_path))["IMAP_STARTUP_EMAIL_LIMIT"] == "25"
+    displayed = settings_service.load_settings()["imap"]["IMAP_STARTUP_EMAIL_LIMIT"]
+    assert displayed["value"] == "25"
+    assert displayed["label"] == "Startup Email Limit"
+
+
+def test_settings_page_rejects_non_positive_startup_email_limit(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("IMAP_STARTUP_EMAIL_LIMIT=10\n", encoding="utf-8")
+    monkeypatch.setattr(settings_service, "_ENV_PATH", str(env_path))
+
+    errors = settings_service.save_settings({"IMAP_STARTUP_EMAIL_LIMIT": "0"})
+
+    assert errors == ["Startup Email Limit must be a positive integer"]
+    assert read_env_pairs(str(env_path))["IMAP_STARTUP_EMAIL_LIMIT"] == "10"
+
+
 def test_uvicorn_receives_saved_bind_address(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -97,3 +120,99 @@ def test_uvicorn_receives_saved_bind_address(monkeypatch):
 
 def test_wildcard_bind_uses_localhost_only_for_auto_open_url():
     assert main._dashboard_browser_url("0.0.0.0", 5000) == "http://localhost:5000"
+
+
+def test_background_email_worker_scans_before_live_monitoring(monkeypatch):
+    events: list[str] = []
+
+    class FakeMonitor:
+        def __init__(self, config):
+            events.append("created")
+
+        def run_startup_scan(self):
+            events.append("startup_scan")
+
+        def start(self):
+            events.append("live_monitor")
+
+    monkeypatch.setattr(main, "EmailMonitor", FakeMonitor)
+
+    main._run_monitor(SimpleNamespace())
+
+    assert events == ["created", "startup_scan", "live_monitor"]
+
+
+def test_live_monitor_starts_even_if_background_startup_scan_fails(monkeypatch):
+    events: list[str] = []
+
+    class FakeMonitor:
+        def __init__(self, config):
+            pass
+
+        def run_startup_scan(self):
+            events.append("startup_scan")
+            raise RuntimeError("IMAP unavailable")
+
+        def start(self):
+            events.append("live_monitor")
+
+    monkeypatch.setattr(main, "EmailMonitor", FakeMonitor)
+
+    main._run_monitor(SimpleNamespace())
+
+    assert events == ["startup_scan", "live_monitor"]
+
+
+def test_main_reaches_dashboard_without_running_startup_scan_inline(monkeypatch):
+    events: list[str] = []
+    config = SimpleNamespace(
+        database_path="test.db",
+        log_directory="logs",
+        log_level="INFO",
+        debug_logging=False,
+        debug_log_max_chars=2000,
+        firewall_host="192.0.2.1",
+        firewall_port=4444,
+        firewall_rule_name="Block IP",
+        firewall_ping_interval=60,
+        imap_host="imap.example.com",
+        imap_port=993,
+        imap_startup_email_limit=10,
+        smtp_host="smtp.example.com",
+        smtp_port=587,
+        dashboard_host="0.0.0.0",
+        dashboard_port=5000,
+        auto_open_browser=True,
+    )
+
+    class DeferredThread:
+        def __init__(self, *, target, args=(), name=None, daemon=None):
+            self.name = name
+
+        def start(self):
+            events.append(f"thread:{self.name}")
+
+    monkeypatch.setattr(main, "load_config", lambda: config)
+    monkeypatch.setattr(main, "configure_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.database, "init_db", lambda path: events.append("database"))
+    monkeypatch.setattr(main.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(
+        "core.legacy_endpoint_migration.run_legacy_endpoint_migration",
+        lambda: {"already_applied": True},
+    )
+    monkeypatch.setattr(
+        "core.rule_updater.sync_blocked_ips_from_history", lambda: 0
+    )
+    monkeypatch.setattr("web.app.create_app", lambda cfg: "dashboard-app")
+    monkeypatch.setattr(
+        main,
+        "_run_dashboard",
+        lambda app, host, port: events.append("dashboard"),
+    )
+
+    main.main()
+
+    assert events[0] == "database"
+    assert events.index("thread:dashboard-browser") < events.index("thread:email-monitor")
+    assert "thread:email-monitor" in events
+    assert events[-1] == "dashboard"

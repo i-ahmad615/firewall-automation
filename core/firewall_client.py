@@ -259,7 +259,7 @@ class SophosClient:
         """Return whether the named IP Host already exists on SFOS.
 
         When *ip* is supplied, the host must also contain that exact address.
-        This read-before-create check keeps catch-up and live processing
+        This read-before-create check keeps startup and live processing
         idempotent without relying solely on SFOS's tolerated 502 response.
         """
         self._ensure_auth()

@@ -34,7 +34,6 @@ def test_newer_uid_is_processed_independent_of_seen_state(tmp_path, was_seen):
         message_id=f"<seen-{was_seen}@example.com>"
     )
     monitor = EmailMonitor(config)
-    monitor._needs_uid_reconciliation = False
     with patch("core.email_monitor.block_ip", return_value="blocked") as block:
         with patch("core.email_monitor.send_notification"):
             assert monitor._poll_folder(mailbox, "INBOX") == 1
@@ -69,17 +68,16 @@ def test_display_name_and_case_insensitive_sender_normalization():
     )
 
 
-def test_reconnection_reconciles_recent_uid_gap(tmp_path):
-    config = replace(_config(tmp_path), imap_uid_reconcile_count=20)
+def test_reconnection_continues_strictly_after_saved_checkpoint(tmp_path):
+    config = _config(tmp_path)
     database.init_db(config.database_path)
     account = f"{config.email_username}|{config.imap_host}:{config.imap_port}"
     database.reset_uid_checkpoint(account, "INBOX", "9")
     database.advance_uid_checkpoint(account, "INBOX", "9", 100)
     mailbox = _mailbox("9", [])
     monitor = EmailMonitor(config)
-    monitor._needs_uid_reconciliation = True
     monitor._poll_folder(mailbox, "INBOX")
-    mailbox.search_uids_since.assert_called_once_with(81)
+    mailbox.search_uids_since.assert_called_once_with(101)
 
 
 def test_server_returning_checkpoint_uid_is_not_counted_or_fetched(tmp_path):
@@ -91,12 +89,34 @@ def test_server_returning_checkpoint_uid_is_not_counted_or_fetched(tmp_path):
     database.advance_uid_checkpoint(account, "INBOX", "9", 332)
     mailbox = _mailbox("9", ["332"])
     monitor = EmailMonitor(config)
-    monitor._needs_uid_reconciliation = False
-
     assert monitor._poll_folder(mailbox, "INBOX") == 0
     mailbox.search_uids_since.assert_called_once_with(333)
     mailbox.fetch_message_peek.assert_not_called()
     assert database.get_uid_checkpoint(account, "INBOX")["last_fetched_uid"] == 332
+
+
+def test_normal_polling_starts_after_startup_checkpoint(tmp_path):
+    config = replace(_config(tmp_path), imap_startup_email_limit=2)
+    monitor = EmailMonitor(config)
+    startup_mailbox = _mailbox("15", ["5", "6", "7"])
+    startup_mailbox.fetch_message_peek.side_effect = [
+        _email(message_id="<startup-6@example.com>"),
+        _email(message_id="<startup-7@example.com>"),
+    ]
+    with patch("core.email_monitor.ImapMailbox", return_value=startup_mailbox):
+        with patch.object(monitor, "_process_message", return_value="processed"):
+            monitor.run_startup_scan()
+
+    runtime_mailbox = _mailbox("15", ["7", "8"])
+    runtime_mailbox.fetch_message_peek.return_value = _email(
+        message_id="<runtime-8@example.com>"
+    )
+    with patch.object(monitor, "_process_message", return_value="processed") as process:
+        assert monitor._poll_folder(runtime_mailbox, "INBOX") == 1
+
+    runtime_mailbox.search_uids_since.assert_called_once_with(8)
+    runtime_mailbox.fetch_message_peek.assert_called_once_with("8")
+    process.assert_called_once()
 
 
 def test_uidvalidity_change_resets_and_reconciles_without_duplicate_action(tmp_path, caplog):
