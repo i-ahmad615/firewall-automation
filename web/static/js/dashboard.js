@@ -4,10 +4,10 @@ const STAT_DEFS = [
   { key: 'successful_blocks', label: 'Successful Blocks', tone: 'success', icon: 'shield', filter: { action_taken: 'blocked' } },
   { key: 'failed_blocks', label: 'Failed Blocks', tone: 'warning', icon: 'x', href: '/failed-ip-queue' },
   { key: 'duplicate_ips', label: 'Duplicate IPs', tone: 'neutral', icon: 'copy', filter: { action_taken: 'duplicate' } },
-  { key: 'allowed_ips_ignored', label: 'Protected Endpoints Ignored', tone: 'neutral', icon: 'check', filter: { decision_status: 'both_trusted' } },
+  { key: 'allowed_ips_ignored', label: 'Protected Endpoints Ignored', tone: 'cyan', icon: 'check', filter: { decision_status: 'both_trusted' } },
   { key: 'neither_endpoint_trusted', label: 'Neither Endpoint Trusted', tone: 'review', icon: 'alert', filter: { decision_status: 'both_untrusted' }, singleClick: true },
-  { key: 'firewall_rule_updates', label: 'Firewall Rule Updates', tone: 'primary', icon: 'refresh', filter: { action_taken: 'blocked' } },
-  { key: 'total_notifications_sent', label: 'Notifications Sent', tone: 'success', icon: 'bell', filter: { notification_sent: '1' } },
+  { key: 'firewall_rule_updates', label: 'Firewall Rule Updates', tone: 'indigo', icon: 'refresh', filter: { action_taken: 'blocked' } },
+  { key: 'total_notifications_sent', label: 'Notifications Sent', tone: 'teal', icon: 'bell', filter: { notification_sent: '1' } },
 ];
 
 function goToAlertsWithFilter(filter) {
@@ -63,12 +63,46 @@ function renderStats(stats) {
 
   STAT_DEFS.forEach(def => {
     const value = stats[def.key] ?? 0;
-    const el = grid.querySelector(`[data-key="${def.key}"]`);
+    const el = grid.querySelector(`.stat-value[data-key="${def.key}"]`);
     const from = lastStatValue[def.key] ?? 0;
     if (el && from !== value) animateCount(el, from, value);
     else if (el && from === undefined) el.textContent = value.toLocaleString();
     lastStatValue[def.key] = value;
   });
+
+  renderBlockSuccessRate(stats);
+}
+
+// Block Success Rate donut -- reuses the same successful_blocks/failed_blocks
+// figures already shown as KPI cards above, so it's real data with no extra
+// API call and nothing hardcoded.
+function drawDonut(svgEl, percent, color) {
+  if (!svgEl) return;
+  const size = 120, stroke = 12, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const offset = c - (clamped / 100) * c;
+  svgEl.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svgEl.innerHTML = `
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--color-border)" stroke-width="${stroke}"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}"
+      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}"
+      transform="rotate(-90 ${size / 2} ${size / 2})" style="transition: stroke-dashoffset 700ms cubic-bezier(0.16,1,0.3,1);"/>
+  `;
+}
+
+function renderBlockSuccessRate(stats) {
+  const successful = stats.successful_blocks ?? 0;
+  const failed = stats.failed_blocks ?? 0;
+  const total = successful + failed;
+  const percent = total > 0 ? Math.round((successful / total) * 100) : 0;
+
+  drawDonut(document.getElementById('chart-block-success'), percent, '#34d399');
+  const percentEl = document.getElementById('block-success-percent');
+  const totalEl = document.getElementById('block-success-total');
+  const successfulEl = document.getElementById('block-success-successful');
+  if (percentEl) percentEl.textContent = `${percent}%`;
+  if (totalEl) totalEl.textContent = total.toLocaleString();
+  if (successfulEl) successfulEl.textContent = successful.toLocaleString();
 }
 
 async function loadStats() {
@@ -79,20 +113,20 @@ async function loadStats() {
 }
 
 const BREAKDOWN_COLORS = {
-  ignored: '#5AA9E6',   // ignored mails
-  blocked: '#7BC9A0',   // blocked successfully
-  allowed: '#B3A6E0',   // allowed IP
-  duplicate: '#E3B97A', // duplicate IP
-  failed: '#E3A0AD',    // block failed
+  ignored: '#3ea6ff',   // ignored mails
+  blocked: '#34d399',   // blocked successfully
+  allowed: '#a78bfa',   // allowed IP
+  duplicate: '#f5b942', // duplicate IP
+  failed: '#f0576b',    // block failed
 };
 
 async function loadCharts() {
   try {
-    const data = await fetchJson('/api/stats/timeseries?days=14');
+    const data = await fetchJson('/api/stats/timeseries?days=7');
     drawLineChart(document.getElementById('chart-timeseries'), data.series, {
       lines: [
-        { key: 'total', color: '#5aa9e6', label: 'Total processed' },
-        { key: 'blocked', color: '#7bc9a0', label: 'Blocked' },
+        { key: 'total', color: '#3ea6ff', label: 'Total processed' },
+        { key: 'blocked', color: '#f0576b', label: 'Blocked' },
       ],
     });
     drawBarChart(document.getElementById('chart-breakdown'), data.breakdown, {

@@ -53,6 +53,13 @@ def create_app(config: AppConfig) -> FastAPI:
 
     app.mount("/static", _NoCacheStaticFiles(directory="web/static"), name="static")
 
+    # Each route module builds its own Jinja2Templates instance (its own
+    # Environment), so the org_name/app_name globals used by base.html and
+    # login.html must be set on every one of them, not just pages.py's.
+    for module in (pages, allowed_ips, alert_details):
+        module.templates.env.globals["org_name"] = config.org_name
+        module.templates.env.globals["app_name"] = config.app_name
+
     app.include_router(pages.router)
     app.include_router(api.router)
     app.include_router(export.router)

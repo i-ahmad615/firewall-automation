@@ -64,14 +64,14 @@ function rowHtml(r) {
   return `
     <tr class="clickable-row" data-alert-id="${escapeHtml(r.id)}" tabindex="0" aria-label="Open alert ${escapeHtml(r.id)} details">
       <td class="selection-cell"><input class="row-select" type="checkbox" data-select-id="${escapeHtml(r.id)}" aria-label="Select alert ${escapeHtml(r.id)}" ${selectedIds.has(Number(r.id)) ? 'checked' : ''}></td>
-      <td class="cell-mono">${fmtDate(r.received_at)}<br><span class="cell-muted">${fmtClock(r.received_at)}</span></td>
-      <td class="cell-wrap">${escapeHtml(r.subject)}</td>
-      <td>${escapeHtml(r.sender)}</td>
-      <td class="cell-mono">${escapeHtml(r.blocked_ip || '-')}</td>
-      <td>${escapeHtml(r.classification || '—')}</td>
-      <td>${badgeHtml(r.status)}</td>
-      <td>${badgeHtml(r.action_taken)}</td>
-      <td class="cell-wrap cell-muted">${escapeHtml(r.reason || '')}</td>
+      <td class="cell-mono" data-label="Date / Time">${fmtDate(r.received_at)}<br><span class="cell-muted">${fmtClock(r.received_at)}</span></td>
+      <td class="cell-wrap" data-label="Subject">${escapeHtml(r.subject)}</td>
+      <td class="cell-wrap" data-label="Sender">${escapeHtml(r.sender)}</td>
+      <td class="cell-mono" data-label="Blocked IP">${escapeHtml(r.blocked_ip || '-')}</td>
+      <td class="cell-wrap" data-label="Classification">${escapeHtml(r.classification || '—')}</td>
+      <td data-label="Status">${badgeHtml(r.status)}</td>
+      <td data-label="Action Taken">${badgeHtml(r.action_taken)}</td>
+      <td class="cell-wrap cell-muted" data-label="Reason">${escapeHtml(r.reason || '')}</td>
     </tr>`;
 }
 

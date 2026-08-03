@@ -17,13 +17,13 @@ function resetForm() {
 }
 function rowHtml(item) {
   return `<tr>
-    <td class="cell-mono">${escapeHtml(item.value)}</td>
-    <td>${escapeHtml(TYPE_LABELS[item.value_type] || item.value_type)}</td>
-    <td>${escapeHtml(CATEGORY_LABELS[item.category] || item.category)}</td>
-    <td class="cell-muted">${escapeHtml(item.description || '—')}</td>
-    <td><label><input type="checkbox" data-active="${item.id}" ${item.is_active ? 'checked' : ''}> ${item.is_active ? 'Active' : 'Inactive'}</label></td>
-    <td>${fmtDate(item.created_at)}</td><td>${fmtDate(item.updated_at)}</td>
-    <td class="table-actions"><button class="btn" data-edit="${item.id}" type="button">Edit</button>
+    <td class="cell-mono cell-wrap" data-label="Value">${escapeHtml(item.value)}</td>
+    <td data-label="Type">${escapeHtml(TYPE_LABELS[item.value_type] || item.value_type)}</td>
+    <td data-label="Category">${escapeHtml(CATEGORY_LABELS[item.category] || item.category)}</td>
+    <td class="cell-muted cell-wrap" data-label="Description">${escapeHtml(item.description || '—')}</td>
+    <td data-label="Active Status"><label><input type="checkbox" data-active="${item.id}" ${item.is_active ? 'checked' : ''}> ${item.is_active ? 'Active' : 'Inactive'}</label></td>
+    <td data-label="Created Date">${fmtDate(item.created_at)}</td><td data-label="Updated Date">${fmtDate(item.updated_at)}</td>
+    <td class="table-actions" data-label="Actions"><button class="btn" data-edit="${item.id}" type="button">Edit</button>
       <button class="btn btn-danger" data-delete="${item.id}" type="button">Delete</button></td>
   </tr>`;
 }

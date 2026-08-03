@@ -3,15 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Security Operations{% endblock %} · SecOps Dashboard</title>
+  <title>{% block title %}Security Operations{% endblock %} · {{ app_name }} Dashboard</title>
   <link rel="icon" type="image/png" href="/static/img/century-favicon.png">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260728-4">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260803-2">
   <script>
-    // Applied before first paint to avoid a flash of the wrong sidebar state.
+    // Applied before first paint to avoid a flash of the wrong sidebar/theme
+    // state. Dark is the default theme -- the data-theme attribute is only
+    // ever added for "light", read back from the same localStorage key the
+    // toggle button writes (see common.js), so the choice survives
+    // navigation, refresh, and restart without needing a server round-trip.
     (function () {
       try {
         if (localStorage.getItem('sidebarPinned') === 'true') {
           document.documentElement.classList.add('sidebar-pinned');
+        }
+        if (localStorage.getItem('theme') === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
         }
       } catch (e) {}
     })();
@@ -22,10 +29,11 @@
     <aside class="sidebar" id="sidebar">
       <div class="brand">
         <div class="brand-mark">
-          <img src="/static/img/century-logo.png" alt="Century Paper &amp; Board Mills" class="brand-logo">
+          <img src="/static/img/century-logo-white.png" alt="{{ org_name }} logo" class="brand-logo brand-logo-dark">
+          <img src="/static/img/century-logo.png" alt="{{ org_name }} logo" class="brand-logo brand-logo-light">
         </div>
         <div class="brand-text">
-          <strong>SecOps</strong>
+          <strong>{{ app_name }}</strong>
         </div>
         <button class="sidebar-pin" id="sidebar-pin" type="button" title="Pin sidebar open" aria-label="Pin sidebar open" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6z" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -65,11 +73,17 @@
         </a>
       </nav>
 
-      <div class="sidebar-footer">
-        <a href="/logout" title="Sign out">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke-linecap="round"/><path d="M16 17l5-5-5-5M21 12H9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span class="nav-text">Sign out</span>
-        </a>
+      <div class="sidebar-bottom">
+        <span class="sidebar-clock" id="clock">
+          <span class="sidebar-clock-time" id="clock-time"></span>
+          <span class="sidebar-clock-date" id="clock-date"></span>
+        </span>
+        <div class="sidebar-footer">
+          <a href="/logout" title="Sign out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;flex-shrink:0"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke-linecap="round"/><path d="M16 17l5-5-5-5M21 12H9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="nav-text">Sign out</span>
+          </a>
+        </div>
       </div>
     </aside>
 
@@ -79,7 +93,6 @@
           <h1>{% block heading %}Dashboard{% endblock %}</h1>
         </div>
         <div class="flex items-center gap-3 topbar-statuses">
-          <span class="live-pill"><span class="live-dot"></span>Monitoring active</span>
           <button class="status-pill checking" id="firewall-status-pill" type="button" title="Click to test firewall connectivity">
             <span class="status-dot"></span><span id="firewall-status-label">Firewall: checking…</span>
           </button>
@@ -93,7 +106,10 @@
           <button class="status-pill checking" id="smtp-status-pill" type="button" title="Click to test outbound mail (SMTP) connectivity">
             <span class="status-dot"></span><span id="smtp-status-label">SMTP: checking…</span>
           </button>
-          <span class="topbar-meta" id="clock"></span>
+          <button class="theme-toggle" id="theme-toggle" type="button" title="Switch to light theme" aria-label="Switch to light theme" aria-pressed="false">
+            <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke-linecap="round"/></svg>
+            <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
         </div>
       </header>
       <div class="content">
@@ -102,7 +118,7 @@
     </div>
   </div>
 
-  <script src="/static/js/common.js?v=20260728-3"></script>
+  <script src="/static/js/common.js?v=20260803-2"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

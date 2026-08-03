@@ -35,19 +35,19 @@
 
   <div class="active-filter-banner" id="active-filter-banner" style="display:none"></div>
 
-  <div class="table-wrap">
-    <table class="data-table" id="table">
+  <div class="table-wrap alerts-table-wrap">
+    <table class="data-table alerts-table" id="table">
       <thead>
         <tr>
           <th class="selection-cell"><input class="row-select" id="select-page" type="checkbox" aria-label="Select all alerts on this page"></th>
-          <th data-key="received_at">Date / Time</th>
-          <th data-key="subject">Subject</th>
-          <th data-key="sender">Sender</th>
-          <th>Blocked IP</th>
-          <th data-key="classification">Classification</th>
-          <th data-key="status">Status</th>
-          <th data-key="action_taken">Action Taken</th>
-          <th>Reason</th>
+          <th class="alerts-col-date" data-key="received_at">Date / Time</th>
+          <th class="alerts-col-subject" data-key="subject">Subject</th>
+          <th class="alerts-col-sender" data-key="sender">Sender</th>
+          <th class="alerts-col-ip">Blocked IP</th>
+          <th class="alerts-col-classification" data-key="classification">Classification</th>
+          <th class="alerts-col-status" data-key="status">Status</th>
+          <th class="alerts-col-action" data-key="action_taken">Action Taken</th>
+          <th class="alerts-col-reason">Reason</th>
         </tr>
       </thead>
       <tbody id="table-body"></tbody>

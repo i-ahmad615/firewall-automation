@@ -3,22 +3,70 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in · SecOps Dashboard</title>
+  <title>Sign in · {{ app_name }} Dashboard</title>
   <link rel="icon" type="image/png" href="/static/img/century-favicon.png">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260803-2">
 </head>
 <body>
+  <!-- Login always renders in the dark theme, regardless of any stored
+       preference -- the light/dark toggle only appears once signed in. -->
   <div class="login-shell">
-    <div class="card login-card">
-      <div class="login-brand">
-        <img src="/static/img/century-logo.png" alt="Century Paper &amp; Board Mills" class="login-logo">
-        <div class="brand-text">
-          <strong>CPBM x SecOps</strong>
-          <span>Firewall Automation</span>
+   <div class="login-content">
+    <div class="login-hero">
+      <div class="login-hero-top">
+        <div class="login-hero-brand">
+          <img src="/static/img/century-logo-white.png" alt="{{ org_name }} logo" class="login-hero-logo">
+          <div class="login-hero-brandtext">
+            <strong>{{ org_name }}</strong>
+            <span class="brand-tech">{{ app_name }}</span>
+          </div>
+        </div>
+        <span class="login-divider"></span>
+
+        <h2 class="login-tagline">
+          <span class="hue-blue">Secure.</span>
+          <span class="hue-purple">Monitor.</span>
+          <span class="hue-red">Protect.</span>
+        </h2>
+        <p class="login-hero-desc">Intelligent firewall automation for enterprise security operations.</p>
+      </div>
+
+      <div class="login-features">
+        <div class="login-feature">
+          <span class="login-feature-icon hue-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <strong>Automated Protection</strong>
+          <span>Smart firewall control</span>
+        </div>
+        <div class="login-feature">
+          <span class="login-feature-icon hue-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
+          <strong>Real-time Monitoring</strong>
+          <span>24/7 threat visibility</span>
+        </div>
+        <div class="login-feature">
+          <span class="login-feature-icon hue-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" stroke-linejoin="round"/></svg></span>
+          <strong>Rapid Response</strong>
+          <span>Instant threat mitigation</span>
+        </div>
+        <div class="login-feature">
+          <span class="login-feature-icon hue-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M12 20V4M20 20v-7" stroke-linecap="round"/></svg></span>
+          <strong>Operational Insight</strong>
+          <span>Actionable intelligence</span>
         </div>
       </div>
-      <div class="text-center">
+    </div>
+
+    <div class="card login-card">
+      <div class="login-brand">
+        <img src="/static/img/century-logo-white.png" alt="{{ org_name }} logo" class="login-logo">
+        <div class="brand-text">
+          <strong>{{ org_name }}</strong>
+          <span class="brand-tech">{{ app_name }}</span>
+        </div>
+      </div>
+
+      <div class="text-center login-heading">
         <h1>Administrator Sign-In</h1>
+        <span class="login-divider login-divider-center"></span>
       </div>
 
       {% if error %}
@@ -29,17 +77,49 @@
         <input type="hidden" name="next" value="{{ request.query_params.get('next', '/') }}">
         <div class="field-group">
           <label for="username">Username</label>
-          <input class="input" type="text" id="username" name="username" required autofocus>
+          <div class="login-input-wrap">
+            <svg class="login-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-7 8-7s8 3 8 7" stroke-linecap="round"/></svg>
+            <input class="input login-input" type="text" id="username" name="username" required autofocus>
+          </div>
         </div>
         <div class="field-group">
           <label for="password">Password</label>
-          <input class="input" type="password" id="password" name="password" required>
+          <div class="login-input-wrap">
+            <svg class="login-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3" stroke-linecap="round"/></svg>
+            <input class="input login-input login-input-has-toggle" type="password" id="password" name="password" required>
+            <button type="button" class="login-input-toggle" id="toggle-password" aria-label="Show password" title="Show password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
         </div>
-        <div class="flex justify-center">
-          <button type="submit" class="btn btn-primary btn-sm">Sign In</button>
-        </div>
+
+
+        <button type="submit" class="login-submit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Sign In</span>
+        </button>
       </form>
+
+      <div class="login-footer">
+        <span class="login-footer-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/></svg></span>
+        <span class="login-footer-text">Authorized access only</span>
+      </div>
     </div>
+   </div>
   </div>
+
+  <script>
+    (function () {
+      var toggle = document.getElementById('toggle-password');
+      var pw = document.getElementById('password');
+      if (!toggle || !pw) return;
+      toggle.addEventListener('click', function () {
+        var showing = pw.type === 'text';
+        pw.type = showing ? 'password' : 'text';
+        toggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+        toggle.setAttribute('title', showing ? 'Show password' : 'Hide password');
+      });
+    })();
+  </script>
 </body>
 </html>

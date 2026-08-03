@@ -40,9 +40,17 @@
       <option value="IP">IP Address</option><option value="CIDR">CIDR Range</option><option value="HOSTNAME">Hostname</option>
     </select>
   </div>
-  <div class="table-wrap">
-    <table class="data-table"><thead><tr><th>Value</th><th>Type</th><th>Category</th><th>Description</th>
-      <th>Active Status</th><th>Created Date</th><th>Updated Date</th><th>Actions</th></tr></thead>
+  <div class="table-wrap endpoints-table-wrap">
+    <table class="data-table endpoints-table"><thead><tr>
+      <th class="endpoints-col-value">Value</th>
+      <th class="endpoints-col-type">Type</th>
+      <th class="endpoints-col-category">Category</th>
+      <th class="endpoints-col-description">Description</th>
+      <th class="endpoints-col-status">Active Status</th>
+      <th class="endpoints-col-date">Created Date</th>
+      <th class="endpoints-col-date">Updated Date</th>
+      <th class="endpoints-col-actions">Actions</th>
+    </tr></thead>
       <tbody id="table-body"></tbody></table>
   </div>
   <div class="pagination"><span id="page-info"></span></div>

@@ -56,6 +56,8 @@ _FIELDS: list[tuple[str, str, str, bool]] = [
     ("application", "DASHBOARD_AUTO_OPEN_BROWSER", "bool", False),
     ("application", "DASHBOARD_ADMIN_USERNAME", "text", False),
     ("application", "DASHBOARD_ADMIN_PASSWORD", "password", True),
+    ("application", "ORG_NAME", "text", False),
+    ("application", "APP_NAME", "text", False),
 ]
 
 # Effective defaults applied by core.config.load_config() when a key is
@@ -72,6 +74,8 @@ _DEFAULTS: dict[str, str] = {
     "DASHBOARD_HOST": "0.0.0.0",
     "DASHBOARD_PORT": "5000",
     "DASHBOARD_ADMIN_USERNAME": "admin",
+    "ORG_NAME": "CPBM",
+    "APP_NAME": "SecOps",
 }
 
 # Extra guidance shown under specific fields in the form.
@@ -87,10 +91,14 @@ _HINTS: dict[str, str] = {
         "Use 0.0.0.0 to make the dashboard available to other devices on "
         "the same network."
     ),
+    "ORG_NAME": "Shown in the sidebar, topbar, login page, and page titles.",
+    "APP_NAME": "The product name, shown alongside the organization name everywhere.",
 }
 
 _LABELS: dict[str, str] = {
     "IMAP_STARTUP_EMAIL_LIMIT": "Startup Email Limit",
+    "ORG_NAME": "Organization Name",
+    "APP_NAME": "Software Name",
 }
 
 

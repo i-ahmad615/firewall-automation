@@ -1,41 +1,47 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500&family=Fira+Code:wght@400;500;600&display=swap');
 
 :root {
-  /* Light sky-blue palette -- calm, professional, easy on the eyes. */
-  --color-primary: #2b7fd6;
-  --color-primary-dark: #1e63ad;
-  --color-secondary: #5aa9e6;
-  --color-accent: #2f9e6e;
-  --color-lavender: #8b7fd6;
-  --color-background: #e8f2fb;
-  --color-surface: #f7fbfe;
-  --color-foreground: #1e2f42;
-  --color-muted: #67798d;
-  --color-muted-bg: #eaf3fb;
-  --color-border: #d3e6f5;
-  --color-destructive: #d9566a;
-  --color-warning: #c4842f;
-  --color-ring: #2b7fd6;
+  /* Deep-navy SOC palette -- dark is the default theme everywhere (sidebar,
+     topbar, cards, tables, and the login page all read it off these same
+     tokens). [data-theme="light"] below overrides them for light mode.
+     The theme is user-toggled (button in the topbar and on the login page),
+     persisted to localStorage, and applied via a synchronous pre-paint
+     script in <head> so there's no flash of the wrong theme on load or
+     between page navigations -- see base.html / login.html. */
+  --color-primary: #3ea6ff;
+  --color-primary-dark: #1c86e8;
+  --color-secondary: #22d3ee;
+  --color-accent: #34d399;
+  --color-lavender: #a78bfa;
+  --color-background: #060b16;
+  --color-surface: #0d1626;
+  --color-surface-alt: rgba(255, 255, 255, 0.03);
+  --color-foreground: #e8edf7;
+  --color-muted: #8496ae;
+  --color-muted-bg: rgba(148, 178, 224, 0.08);
+  --color-border: rgba(148, 178, 224, 0.14);
+  --color-destructive: #f0576b;
+  --color-warning: #f5b942;
+  --color-ring: #3ea6ff;
 
-  /* Soft pastel tints used for calm KPI cards */
-  --tint-blue-bg: #eef5fd;
-  --tint-blue-fg: #2b6cb0;
-  --tint-green-bg: #eef8f2;
-  --tint-green-fg: #2f8a5e;
-  --tint-rose-bg: #fbeef1;
-  --tint-rose-fg: #c05a70;
-  --tint-amber-bg: #fbf3e8;
-  --tint-amber-fg: #b17a2e;
-  --tint-gray-bg: #f2f4f7;
-  --tint-gray-fg: #5b6b7c;
+  --tint-blue-bg: rgba(62, 166, 255, 0.14);
+  --tint-blue-fg: #5fbaff;
+  --tint-green-bg: rgba(52, 211, 153, 0.14);
+  --tint-green-fg: #34d399;
+  --tint-rose-bg: rgba(240, 87, 107, 0.14);
+  --tint-rose-fg: #f0576b;
+  --tint-amber-bg: rgba(245, 185, 66, 0.14);
+  --tint-amber-fg: #f5b942;
+  --tint-gray-bg: rgba(148, 178, 224, 0.10);
+  --tint-gray-fg: #a3b4cb;
 
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 22px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 10px 26px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.55);
 
-  --shadow-sm: 0 1px 2px rgba(30, 47, 66, 0.05);
-  --shadow-md: 0 8px 22px rgba(30, 47, 66, 0.07);
-  --shadow-lg: 0 20px 48px rgba(30, 47, 66, 0.10);
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
 
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
@@ -49,9 +55,81 @@
   --topbar-h: 72px;
 }
 
-/* Light sky-blue is the only theme this dashboard ships today -- it is
-   intentionally NOT switched by the OS/browser's prefers-color-scheme, so
-   it always renders the same regardless of the visitor's system setting. */
+/* Light mode: the same component design (rings, glows, cards, tables) on a
+   crisp light-neutral surface instead of deep navy -- not a return to the
+   old plain pastel palette. Every component already renders through the
+   var(--color-*) tokens, so redefining them here cascades through the
+   shared sidebar/topbar/card/table/chart CSS with no per-component
+   duplication -- only the handful of rules below that use literal colors
+   instead of tokens (glows, translucent pills, the background image on the
+   login page) need an explicit [data-theme="light"] counterpart. */
+:root[data-theme="light"] {
+  --color-primary: #2b7fd6;
+  --color-primary-dark: #1e63ad;
+  --color-secondary: #0891b2;
+  --color-accent: #1f9d6e;
+  --color-lavender: #7c5cd6;
+  --color-background: #eef3f9;
+  --color-surface: #ffffff;
+  --color-surface-alt: rgba(15, 30, 45, 0.03);
+  --color-foreground: #101a2b;
+  --color-muted: #5c6f85;
+  --color-muted-bg: #eef2f8;
+  --color-border: #dbe4ef;
+  --color-destructive: #d9364f;
+  --color-warning: #b3720f;
+  --color-ring: #2b7fd6;
+
+  --tint-blue-bg: #e7f1fc;
+  --tint-blue-fg: #1d5fa3;
+  --tint-green-bg: #e7f7ef;
+  --tint-green-fg: #1c8256;
+  --tint-rose-bg: #fceaed;
+  --tint-rose-fg: #b8324a;
+  --tint-amber-bg: #fbf1e0;
+  --tint-amber-fg: #96630f;
+  --tint-gray-bg: #eef1f5;
+  --tint-gray-fg: #56657a;
+
+  --shadow-sm: 0 1px 2px rgba(16, 26, 43, 0.06);
+  --shadow-md: 0 10px 26px rgba(16, 26, 43, 0.10);
+  --shadow-lg: 0 24px 56px rgba(16, 26, 43, 0.14);
+}
+
+/* Literal (non-token) colors that need an explicit light-mode counterpart */
+::selection { background: rgba(62, 166, 255, 0.28); }
+:root[data-theme="light"] ::selection { background: rgba(43, 127, 214, 0.18); }
+
+.topbar { background: rgba(6, 11, 22, 0.78); border-bottom-color: var(--color-border); }
+:root[data-theme="light"] .topbar { background: rgba(255, 255, 255, 0.82); }
+
+/* Two separate logo assets, not one image reused via mix-blend-mode: a white
+   cutout for the dark sidebar, the original mark for the light sidebar.
+   Only one is ever in the flow at a time (display:none on the other), so
+   .brand-mark's flex centering lays out whichever one is visible on its own. */
+.brand-logo-dark { mix-blend-mode: normal; }
+.brand-logo-light { display: none; mix-blend-mode: multiply; }
+:root[data-theme="light"] .brand-logo-dark { display: none; }
+:root[data-theme="light"] .brand-logo-light { display: block; }
+
+.nav-item.active { background: rgba(62, 166, 255, 0.14); color: #7cc4ff; }
+:root[data-theme="light"] .nav-item.active { background: rgba(43, 127, 214, 0.10); color: var(--color-primary-dark); }
+
+.stat-card:hover { box-shadow: var(--shadow-md), 0 0 0 1px var(--color-border); }
+.tone-primary:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(62, 166, 255, 0.35); }
+.tone-success:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(52, 211, 153, 0.35); }
+.tone-danger:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(240, 87, 107, 0.35); }
+.tone-warning:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(245, 185, 66, 0.35); }
+.tone-neutral:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(148, 163, 184, 0.35); }
+.tone-cyan:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(34, 211, 238, 0.35); }
+.tone-review:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(167, 139, 250, 0.35); }
+.tone-indigo:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(129, 140, 248, 0.35); }
+.tone-teal:hover { box-shadow: var(--shadow-md), 0 0 0 1px rgba(45, 212, 191, 0.35); }
+
+.feed::-webkit-scrollbar { width: 8px; }
+.feed::-webkit-scrollbar-track { background: transparent; }
+.feed::-webkit-scrollbar-thumb { background: rgba(148, 178, 224, 0.22); border-radius: 8px; }
+:root[data-theme="light"] .feed::-webkit-scrollbar-thumb { background: rgba(16, 26, 43, 0.16); }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -69,8 +147,6 @@ body {
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
 input, select { font-family: inherit; }
-
-::selection { background: rgba(43, 127, 214, 0.18); }
 
 /* ── Layout shell ────────────────────────────────────────────────── */
 
@@ -142,9 +218,8 @@ html.sidebar-pinned .main {
   height: auto;
   object-fit: contain;
   background: transparent;
-  /* Knocks out a white/light matte baked into the source image so the
-     logo blends onto the sidebar surface instead of showing a box. */
-  mix-blend-mode: multiply;
+  /* Shared sizing for both logo images -- see .brand-logo-dark/-light above
+     for which one is visible per theme and their blend modes. */
 }
 
 .brand-text { display: flex; flex-direction: column; white-space: nowrap; }
@@ -201,45 +276,96 @@ html.sidebar-pinned .sidebar-pin {
 .nav-item .nav-text { opacity: 0; transition: opacity 150ms ease; }
 .sidebar:hover .nav-item .nav-text, html.sidebar-pinned .nav-item .nav-text { opacity: 1; }
 .nav-item:hover { background: var(--color-muted-bg); color: var(--color-foreground); }
-.nav-item.active {
-  background: rgba(43, 127, 214, 0.1);
-  color: var(--color-primary-dark);
-  font-weight: 600;
-}
+.nav-item.active { font-weight: 600; }
 
-.sidebar-footer { margin-top: auto; padding: var(--space-3); border-top: 1px solid var(--color-border); }
+/* Wrapper pinned to the sidebar's bottom -- clock above, sign-out (with its
+   own separator line) below, so the line sits between them rather than
+   above the clock. */
+.sidebar-bottom { margin-top: auto; }
+
+.sidebar-footer { padding: var(--space-3); border-top: 1px solid var(--color-border); }
 .sidebar-footer a { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); font-size: 13px; white-space: nowrap; }
 .sidebar-footer a:hover { color: var(--color-destructive); }
 .sidebar-footer .nav-text { opacity: 0; transition: opacity 150ms ease; }
 .sidebar:hover .sidebar-footer .nav-text, html.sidebar-pinned .sidebar-footer .nav-text { opacity: 1; }
 
+/* Clock: the time stays visible (and prominent) even in the collapsed icon
+   rail; the full weekday/date line only fades in once the sidebar is
+   hovered/pinned open, same breakpoint as the nav labels. Single-line,
+   ellipsized rather than wrapped -- a wrapped multi-line timestamp was tall
+   enough to force the sidebar itself to scroll. */
+.sidebar-clock {
+  display: block;
+  padding: 0 var(--space-3) var(--space-2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sidebar-clock-time {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.sidebar-clock-date {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  opacity: 0;
+  height: 0;
+  transition: opacity 150ms ease;
+}
+.sidebar:hover .sidebar-clock-date, html.sidebar-pinned .sidebar-clock-date { opacity: 1; height: auto; }
+
 @media (prefers-reduced-motion: reduce) {
-  .sidebar, .main, .brand-text, .sidebar-pin, .nav-label, .nav-item .nav-text, .sidebar-footer .nav-text {
+  .sidebar, .main, .brand-text, .sidebar-pin, .nav-label, .nav-item .nav-text, .sidebar-footer .nav-text, .sidebar-clock-date {
     transition: none;
   }
 }
 
 .topbar {
-  height: var(--topbar-h);
+  height: auto;
+  min-height: var(--topbar-h);
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 var(--space-8);
+  padding: 12px var(--space-8);
   border-bottom: 1px solid var(--color-border);
-  background: rgba(247,251,254,0.8);
   backdrop-filter: blur(12px);
   position: sticky; top: 0; z-index: 10;
 }
 
 .topbar h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+
+/* Dashboard-only heading: org name stacked above the product name, the
+   product name set in the monospace "tech" face to read as a product/brand
+   mark rather than plain prose. */
+.topbar h1 .heading-org { display: block; font-size: 13px; font-weight: 600; color: var(--color-muted); letter-spacing: 0.02em; }
+.topbar h1 .heading-app {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin-top: 2px;
+  color: #22d3ee;
+  text-shadow: 0 0 12px rgba(34,211,238,0.35);
+}
+:root[data-theme="light"] .topbar h1 .heading-app { color: var(--color-secondary); text-shadow: none; }
 .topbar-meta { font-size: 13px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .topbar-statuses { flex-wrap: wrap; justify-content: flex-end; }
 
 .live-pill {
   display: inline-flex; align-items: center; gap: 7px;
   font-size: 12px; font-weight: 600; color: var(--color-accent);
-  background: rgba(47, 158, 110, 0.1);
+  background: rgba(52, 211, 153, 0.10);
   padding: 6px 12px; border-radius: 999px;
-  border: 1px solid rgba(47, 158, 110, 0.18);
+  border: 1px solid rgba(52, 211, 153, 0.22);
 }
+:root[data-theme="light"] .live-pill { background: rgba(31, 157, 110, 0.10); border-color: rgba(31, 157, 110, 0.22); }
 .live-dot {
   position: relative;
   width: 7px; height: 7px; border-radius: 50%;
@@ -275,29 +401,53 @@ html.sidebar-pinned .sidebar-pin {
 .status-pill.checking { color: var(--color-muted); background: var(--color-muted-bg); border-color: var(--color-border); }
 .status-pill.checking .status-dot { background: var(--color-muted); animation: statusPulse 1s ease-in-out infinite; }
 
-.status-pill.online { color: var(--color-accent); background: rgba(47, 158, 110, 0.1); border-color: rgba(47, 158, 110, 0.18); }
+.status-pill.online { color: var(--color-accent); background: rgba(52, 211, 153, 0.10); border-color: rgba(52, 211, 153, 0.24); }
 .status-pill.online .status-dot { background: var(--color-accent); }
+:root[data-theme="light"] .status-pill.online { background: rgba(31, 157, 110, 0.10); border-color: rgba(31, 157, 110, 0.22); }
 
-.status-pill.offline { color: var(--color-destructive); background: rgba(217, 86, 106, 0.1); border-color: rgba(217, 86, 106, 0.22); }
+.status-pill.offline { color: var(--color-destructive); background: rgba(240, 87, 107, 0.12); border-color: rgba(240, 87, 107, 0.28); }
 .status-pill.offline .status-dot { background: var(--color-destructive); animation: statusPulse 1.4s ease-in-out infinite; }
+:root[data-theme="light"] .status-pill.offline { background: rgba(217, 54, 79, 0.10); border-color: rgba(217, 54, 79, 0.22); }
 
 .firewall-console-link {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 31px; padding: 6px 12px; border-radius: 999px;
-  border: 1px solid rgba(36, 105, 179, 0.2);
-  background: rgba(36, 105, 179, 0.08); color: var(--color-primary);
+  border: 1px solid rgba(62, 166, 255, 0.26);
+  background: rgba(62, 166, 255, 0.10); color: var(--color-primary);
   font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap;
   text-decoration: none;
   transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
 }
 .firewall-console-link svg { width: 14px; height: 14px; flex: 0 0 auto; }
-.firewall-console-link:hover { background: rgba(36, 105, 179, 0.14); transform: translateY(-1px); }
+.firewall-console-link:hover { background: rgba(62, 166, 255, 0.18); transform: translateY(-1px); }
 .firewall-console-link:active { transform: translateY(0) scale(0.97); }
+:root[data-theme="light"] .firewall-console-link { background: rgba(43, 127, 214, 0.08); border-color: rgba(43, 127, 214, 0.2); }
+:root[data-theme="light"] .firewall-console-link:hover { background: rgba(43, 127, 214, 0.14); }
 
 @keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .status-dot { animation: none !important; } }
 
-.content { padding: var(--space-8); display: flex; flex-direction: column; gap: var(--space-6); flex: 1; }
+/* Dark/light theme toggle -- both icons are always in the DOM; which one
+   shows is a pure CSS attribute-selector switch on [data-theme="light"], so
+   toggling the theme never has to touch the button's markup. */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 31px; height: 31px;
+  border: 1px solid var(--color-border);
+  background: var(--color-muted-bg);
+  color: var(--color-muted);
+  border-radius: 999px;
+  flex-shrink: 0;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+.theme-toggle:hover { color: var(--color-foreground); transform: translateY(-1px); }
+.theme-toggle:active { transform: translateY(0) scale(0.97); }
+.theme-icon { width: 16px; height: 16px; }
+.theme-icon-moon { display: none; }
+:root[data-theme="light"] .theme-icon-sun { display: none; }
+:root[data-theme="light"] .theme-icon-moon { display: block; }
+
+.content { padding: 22px 28px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
 
 /* ── Cards ───────────────────────────────────────────────────────── */
 
@@ -314,105 +464,142 @@ html.sidebar-pinned .sidebar-pin {
   border: 1px solid rgba(211,230,245,0.6);
 }
 
-.stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-5); min-width: 0; }
-html.sidebar-hover .stat-grid,
-html.sidebar-pinned .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-@media (max-width: 1200px) {
-  html.sidebar-hover .stat-grid,
-  html.sidebar-pinned .stat-grid,
-  .stat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+/* 4 compact KPI cards per row on desktop -- two full rows plus a lone 9th
+   card that keeps its native (single-column) width instead of stretching. */
+.stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; min-width: 0; }
+@media (max-width: 1024px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  html.sidebar-hover .stat-grid,
-  html.sidebar-pinned .stat-grid,
-  .stat-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  .stat-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .stat-card {
-  padding: var(--space-5) var(--space-6);
+  padding: 12px 15px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: 10px;
   cursor: pointer;
   user-select: none;
   transition: transform 200ms ease, box-shadow 200ms ease;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .stat-card.enter { animation: statIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 @keyframes statIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .stat-card.enter { animation: none; } }
 
+/* Outlined ring badge -- border + icon glyph both pick up the tone color
+   via currentColor, so each tone-* rule only has to set one property. A
+   restrained glow, not an oversized halo: small radius, modest opacity. */
 .stat-icon {
-  width: 44px; height: 44px;
-  border-radius: 13px;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  background: var(--color-surface-alt);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
+  box-shadow: 0 0 5px 0 currentColor;
 }
-.stat-icon svg { width: 20px; height: 20px; }
+.stat-icon svg { width: 15px; height: 15px; filter: drop-shadow(0 0 2px currentColor); }
 
 .stat-label {
-  font-size: 13px;
+  font-size: 11.5px;
   color: var(--color-muted);
   font-weight: 600;
   line-height: 1.3;
   flex: 1;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-value {
   font-family: var(--font-mono);
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
   flex-shrink: 0;
   margin-left: auto;
-  padding-left: var(--space-3);
+  padding-left: var(--space-2);
 }
 
-/* Calm pastel-tinted KPI cards -- one soft hue per category, easy on the eyes */
-.tone-primary { background: var(--tint-blue-bg); border-color: rgba(43,127,214,0.10); }
-.tone-primary .stat-icon { background: rgba(43,127,214,0.14); color: var(--tint-blue-fg); }
-.tone-primary .stat-value { color: var(--tint-blue-fg); }
+/* One hue per KPI, chosen for what the metric *means* rather than just for
+   variety -- conventional traffic-light semantics for the three outcome
+   metrics, cooler distinct hues for the informational/positive/review ones
+   so nothing is misread as an alert that isn't one:
+     primary (blue)  = neutral volume metric (Total Emails Processed)
+     danger  (red)   = threat signal (Attack Emails Detected)
+     success (green) = confirmed positive outcome (Successful Blocks)
+     warning (amber) = actionable failure, not an active threat (Failed Blocks)
+     neutral (slate) = informational, no action implied (Duplicate IPs)
+     cyan            = trust/protection working as intended (Protected Endpoints Ignored)
+     review  (violet)= ambiguous case flagged for manual review (Neither Endpoint Trusted)
+     indigo          = system/infrastructure action (Firewall Rule Updates)
+     teal            = positive output/communication (Notifications Sent) */
+.tone-primary { border-color: rgba(62,166,255,0.24); }
+.tone-primary .stat-icon, .tone-primary .stat-value { color: #3ea6ff; }
 
-.tone-success { background: var(--tint-green-bg); border-color: rgba(47,158,110,0.10); }
-.tone-success .stat-icon { background: rgba(47,158,110,0.14); color: var(--tint-green-fg); }
-.tone-success .stat-value { color: var(--tint-green-fg); }
+.tone-success { border-color: rgba(52,211,153,0.24); }
+.tone-success .stat-icon, .tone-success .stat-value { color: #34d399; }
 
-.tone-danger { background: var(--tint-rose-bg); border-color: rgba(217,86,106,0.10); }
-.tone-danger .stat-icon { background: rgba(217,86,106,0.14); color: var(--tint-rose-fg); }
-.tone-danger .stat-value { color: var(--tint-rose-fg); }
+.tone-danger { border-color: rgba(240,87,107,0.26); }
+.tone-danger .stat-icon, .tone-danger .stat-value { color: #f0576b; }
 
-.tone-warning { background: var(--tint-amber-bg); border-color: rgba(196,132,47,0.10); }
-.tone-warning .stat-icon { background: rgba(196,132,47,0.14); color: var(--tint-amber-fg); }
-.tone-warning .stat-value { color: var(--tint-amber-fg); }
+.tone-warning { border-color: rgba(245,185,66,0.26); }
+.tone-warning .stat-icon, .tone-warning .stat-value { color: #f5b942; }
 
-.tone-neutral { background: var(--tint-gray-bg); border-color: rgba(91,107,124,0.08); }
-.tone-neutral .stat-icon { background: rgba(91,107,124,0.12); color: var(--tint-gray-fg); }
-.tone-neutral .stat-value { color: var(--tint-gray-fg); }
+.tone-neutral { border-color: rgba(148,163,184,0.26); }
+.tone-neutral .stat-icon, .tone-neutral .stat-value { color: #94a3b8; }
 
-.tone-review { background: #f5f1ff; border-color: rgba(124, 58, 237, 0.12); }
-.tone-review .stat-icon { background: rgba(124, 58, 237, 0.13); color: #6d28d9; }
-.tone-review .stat-value { color: #6d28d9; }
+.tone-cyan { border-color: rgba(34,211,238,0.26); }
+.tone-cyan .stat-icon, .tone-cyan .stat-value { color: #22d3ee; }
 
-.section-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--space-5); }
+.tone-review { border-color: rgba(167,139,250,0.26); }
+.tone-review .stat-icon, .tone-review .stat-value { color: #a78bfa; }
+
+.tone-indigo { border-color: rgba(129,140,248,0.26); }
+.tone-indigo .stat-icon, .tone-indigo .stat-value { color: #818cf8; }
+
+.tone-teal { border-color: rgba(45,212,191,0.26); }
+.tone-teal .stat-icon, .tone-teal .stat-value { color: #2dd4bf; }
+
+.section-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+.section-grid.section-grid-triple { grid-template-columns: 1.3fr 0.8fr 1fr; }
 @media (max-width: 1100px) { .section-grid { grid-template-columns: 1fr; } }
 
-.panel { padding: var(--space-6); }
-.panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-5); }
+.panel { padding: 16px 18px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .panel-header h2 { font-size: 16px; font-weight: 700; margin: 0; }
 .panel-header .hint { font-size: 12px; color: var(--color-muted); }
 
 /* ── Activity feed ───────────────────────────────────────────────── */
 
-.feed { display: flex; flex-direction: column; gap: 2px; max-height: 480px; overflow-y: auto; }
+.feed { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
+
+/* ── Block Success Rate donut ────────────────────────────────────── */
+
+.donut-panel { display: flex; flex-direction: column; align-items: center; }
+.donut-wrap { position: relative; width: 132px; height: 132px; margin: 2px auto 10px; }
+.donut-wrap svg { width: 100%; height: 100%; }
+.donut-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+}
+.donut-percent { font-family: var(--font-mono); font-size: 24px; font-weight: 700; color: var(--color-foreground); }
+.donut-caption { font-size: 11px; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.donut-stats { display: flex; gap: var(--space-6); width: 100%; justify-content: center; }
+.donut-stat { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.donut-stat-label { font-size: 11px; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.donut-stat-value { font-family: var(--font-mono); font-size: 17px; font-weight: 700; }
 .feed-item {
   display: grid; grid-template-columns: 90px 20px 1fr; gap: var(--space-3);
   align-items: start;
@@ -439,11 +626,11 @@ html.sidebar-pinned .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)
 
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
 .badge svg { width: 12px; height: 12px; }
-.badge.success { background: rgba(47,158,110,0.12); color: #2f8a5e; }
-.badge.danger { background: rgba(217,86,106,0.12); color: #c05a70; }
-.badge.warning { background: rgba(196,132,47,0.12); color: #b17a2e; }
+.badge.success { background: var(--tint-green-bg); color: var(--tint-green-fg); }
+.badge.danger { background: var(--tint-rose-bg); color: var(--tint-rose-fg); }
+.badge.warning { background: var(--tint-amber-bg); color: var(--tint-amber-fg); }
 .badge.neutral { background: var(--color-muted-bg); color: var(--color-muted); }
-.badge.info { background: rgba(43,127,214,0.12); color: var(--color-primary-dark); }
+.badge.info { background: var(--tint-blue-bg); color: var(--tint-blue-fg); }
 
 /* ── Tables ──────────────────────────────────────────────────────── */
 
@@ -453,9 +640,10 @@ html.sidebar-pinned .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-4);
   background: var(--tint-blue-bg);
-  border: 1px solid rgba(43,127,214,0.14);
+  border: 1px solid rgba(62,166,255,0.22);
   border-radius: var(--radius-sm);
 }
+:root[data-theme="light"] .active-filter-banner { border-color: rgba(43,127,214,0.14); }
 .active-filter-banner .btn { padding: 4px 12px; font-size: 12.5px; margin-left: auto; }
 .input, .select {
   border: 1px solid var(--color-border);
@@ -467,7 +655,8 @@ html.sidebar-pinned .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)
   outline: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
-.input:focus, .select:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(43,127,214,0.18); }
+.input:focus, .select:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(62,166,255,0.22); }
+:root[data-theme="light"] .input:focus, :root[data-theme="light"] .select:focus { box-shadow: 0 0 0 3px rgba(43,127,214,0.18); }
 .input-search { min-width: 240px; }
 
 .table-wrap { overflow-x: auto; border-radius: var(--radius-md); border: 1px solid var(--color-border); }
@@ -482,8 +671,17 @@ table.data-table thead th {
 table.data-table thead th:hover { color: var(--color-foreground); }
 table.data-table thead th.sorted::after { content: ' \2193'; }
 table.data-table thead th.sorted.asc::after { content: ' \2191'; }
+/* The header row's own background is square by default; border-radius on
+   .table-wrap alone doesn't clip it, so the sharp corners poke out past the
+   rounded card underneath it. Round the header's own first/last cell to
+   match instead of relying on wrapper clipping (which would also break
+   horizontal scrolling on wide tables). */
+table.data-table thead tr:first-child th:first-child { border-top-left-radius: var(--radius-md); }
+table.data-table thead tr:first-child th:last-child { border-top-right-radius: var(--radius-md); }
 table.data-table tbody td { padding: 12px 16px; border-bottom: 1px solid var(--color-border); }
 table.data-table tbody tr:hover { background: var(--color-muted-bg); }
+table.data-table tbody tr:last-child:hover td:first-child { border-bottom-left-radius: var(--radius-md); }
+table.data-table tbody tr:last-child:hover td:last-child { border-bottom-right-radius: var(--radius-md); }
 table.data-table tbody tr:last-child td { border-bottom: none; }
 .selection-cell { width: 42px; min-width: 42px; text-align: center !important; padding-left: 10px !important; padding-right: 10px !important; }
 .row-select { width: 16px; height: 16px; margin: 0; accent-color: var(--color-primary); cursor: pointer; vertical-align: middle; }
@@ -508,6 +706,53 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .retry-queue-table th,
 .retry-queue-table td { min-width: 0; overflow-wrap: anywhere; }
 .retry-queue-table tbody td { vertical-align: middle; }
+
+/* Alert History: fixed, percentage-sized columns so all 9 columns (plus the
+   selection checkbox) always fit the panel's width -- no horizontal scroll
+   needed on desktop. Every cell wraps instead of forcing nowrap overflow. */
+.alerts-table-wrap { overflow-x: visible; }
+/* table.data-table (type+class) otherwise beats plain .alerts-table on
+   specificity, so its white-space: nowrap would win and force every header
+   and cell onto one line -- overflowing into the next column instead of
+   wrapping. table.alerts-table matches that specificity so this wins. */
+table.alerts-table { width: 100%; table-layout: fixed; white-space: normal; }
+.alerts-table th, .alerts-table td { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.alerts-table .alerts-col-date { width: 10%; }
+.alerts-table .alerts-col-subject { width: 18%; }
+.alerts-table .alerts-col-sender { width: 14%; }
+.alerts-table .alerts-col-ip { width: 13%; }
+.alerts-table .alerts-col-classification { width: 10%; }
+.alerts-table .alerts-col-status { width: 9%; }
+.alerts-table .alerts-col-action { width: 10%; }
+.alerts-table .alerts-col-reason { width: 16%; }
+.alerts-table .cell-wrap { max-width: none; }
+
+/* Blocked IP must never wrap or split -- give it a wide enough fixed share
+   plus a slightly smaller mono size so a full IPv4 address always renders
+   on one line and never bleeds into the Classification column next to it. */
+.alerts-table td[data-label="Blocked IP"] { white-space: nowrap; font-size: 12px; }
+
+/* Protected Endpoints: same fixed, percentage-sized column approach as
+   Alert History so all 8 columns fit the panel's width without a
+   horizontal scrollbar. */
+.endpoints-table-wrap { overflow-x: visible; }
+table.endpoints-table { width: 100%; table-layout: fixed; white-space: normal; }
+.endpoints-table th, .endpoints-table td { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.endpoints-table .endpoints-col-value { width: 16%; }
+.endpoints-table .endpoints-col-type { width: 9%; }
+.endpoints-table .endpoints-col-category { width: 12%; }
+.endpoints-table .endpoints-col-description { width: 18%; }
+.endpoints-table .endpoints-col-status { width: 10%; }
+.endpoints-table .endpoints-col-date { width: 10%; }
+.endpoints-table .endpoints-col-actions { width: 15%; }
+.endpoints-table .cell-wrap { max-width: none; }
+
+/* Two action buttons stacked, not side-by-side, so they always fit inside
+   their narrow fixed-width column regardless of screen size. */
+td.table-actions { display: flex; flex-direction: column; gap: 6px; }
+td.table-actions .btn { width: 100%; justify-content: center; }
+.panel-header .table-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
 .retry-count { text-align: center; font-variant-numeric: tabular-nums; }
 .retry-date { white-space: nowrap !important; }
 .retry-error { max-width: none; white-space: normal; word-break: break-word; line-height: 1.45; }
@@ -531,9 +776,15 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 
 .pagination { display: flex; align-items: center; justify-content: space-between; padding: var(--space-4) 0; font-size: 13px; color: var(--color-muted); }
 .pagination-btns { display: flex; gap: var(--space-2); }
+/* Plain buttons (Edit, Previous/Next, Import/Export, Cancel, ...) stand out
+   as light, clearly clickable controls against the dark page instead of
+   blending into the surrounding dark card -- var(--color-surface) is the
+   same dark navy as the card behind them. Light mode falls back to the
+   normal token-based look (already light there, so this is a no-op). */
 .btn {
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border: 1px solid #d3dbe6;
+  background: #e7ecf3;
+  color: #101a2b;
   border-radius: var(--radius-sm);
   padding: 8px 14px;
   font-size: 13.5px;
@@ -541,10 +792,12 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
   display: inline-flex; align-items: center; gap: 6px;
   transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
 }
-.btn:hover:not(:disabled) { background: var(--color-muted-bg); }
+.btn:hover:not(:disabled) { background: #d7e0ec; }
 .btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn svg { width: 14px; height: 14px; }
+:root[data-theme="light"] .btn { background: var(--color-surface); border-color: var(--color-border); color: var(--color-foreground); }
+:root[data-theme="light"] .btn:hover:not(:disabled) { background: var(--color-muted-bg); }
 .btn-primary { background: var(--color-primary); border-color: var(--color-primary); color: white; }
 .btn-primary:hover:not(:disabled) { background: var(--color-primary-dark); color: white; }
 .btn-sm { padding: 7px 22px; font-size: 13px; justify-content: center; }
@@ -599,28 +852,235 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .field-check input { width: 16px; height: 16px; accent-color: var(--color-primary); }
 
 .alert-banner { padding: var(--space-4) var(--space-5); border-radius: var(--radius-sm); font-size: 13.5px; font-weight: 500; display: flex; align-items: center; gap: var(--space-2); }
-.alert-banner.success { background: rgba(47,158,110,0.1); color: #2f8a5e; border: 1px solid rgba(47,158,110,0.22); }
-.alert-banner.error { background: rgba(217,86,106,0.1); color: #c05a70; border: 1px solid rgba(217,86,106,0.22); }
+.alert-banner.success { background: var(--tint-green-bg); color: var(--tint-green-fg); border: 1px solid rgba(52,211,153,0.22); }
+.alert-banner.error { background: var(--tint-rose-bg); color: var(--tint-rose-fg); border: 1px solid rgba(240,87,107,0.25); }
+:root[data-theme="light"] .alert-banner.success { border-color: rgba(31,157,110,0.22); }
+:root[data-theme="light"] .alert-banner.error { border-color: rgba(217,54,79,0.22); }
 
 /* ── Login ───────────────────────────────────────────────────────── */
+/* This page always renders as a dark SOC hero + glass sign-in card,
+   independent of the light theme used by the rest of the app -- these
+   classes exist only on this page, so they're safe to style unconditionally
+   (same approach as the dashboard-only .stat-card rules above). */
 
-.login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at top, rgba(43,127,214,0.10), transparent 60%), var(--color-background); }
-.login-card { width: 380px; padding: var(--space-8); display: flex; flex-direction: column; gap: var(--space-5); }
-.login-card h1 { font-size: 20px; margin: 0; }
-.login-card p { color: var(--color-muted); font-size: 13.5px; margin: 0; }
-
-.login-brand { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); text-align: center; }
-.login-logo {
-  max-width: 220px;
-  max-height: 88px;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  background: transparent;
-  mix-blend-mode: multiply;
+/* Fixed viewport height + hidden overflow: this page must never scroll, on
+   any screen size -- the inner content compresses (see height media query)
+   and the decorative hero panel drops off entirely below 900px instead. */
+.login-shell {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 56px;
+  background: #05070f url('/static/img/login-page-background.png') center/cover no-repeat;
+  position: relative;
+  overflow: hidden;
+  color: #e8edf7;
+  font-family: var(--font-sans);
 }
+.login-shell::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(100deg, rgba(3,5,10,0.2) 0%, rgba(3,5,10,0.32) 55%, rgba(3,5,10,0.48) 100%);
+  pointer-events: none;
+}
+
+/* Caps total width on ultra-wide monitors so the hero and card stay a
+   consistent, proportionate distance apart instead of the card drifting
+   off toward the far right edge as leftover grid space grows. */
+.login-content {
+  position: relative; z-index: 1;
+  width: 100%;
+  max-width: 1360px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(340px, 420px);
+  align-items: center;
+  gap: 56px;
+}
+
+/* Stretches to the same height as the card (its grid row's tallest item)
+   so the top group lines up with the card's top edge and the feature row
+   lines up with the card's bottom edge, instead of both being centered
+   independently. */
+.login-hero { min-width: 0; align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
+.login-hero-top { display: flex; flex-direction: column; gap: 16px; }
+.login-hero-brand { display: flex; align-items: center; gap: 14px; }
+.login-hero-logo { width: 52px; height: 52px; object-fit: contain; flex-shrink: 0; }
+.login-hero-brandtext { display: flex; flex-direction: column; }
+.login-hero-brandtext strong { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
+
+/* Product name set in the monospace "tech" face with a faint cyan glow, in
+   place of the old static "Firewall Automation" tagline. */
+.brand-tech {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #22d3ee;
+  text-shadow: 0 0 10px rgba(34,211,238,0.45);
+}
+
+.login-divider { display: block; width: 64px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, #3ea6ff, #c084fc); flex-shrink: 0; }
+.login-divider-center { margin: 8px auto 0; }
+
+.login-tagline { display: flex; flex-wrap: wrap; gap: 10px; font-size: 24px; font-weight: 800; margin: 4px 0 0; letter-spacing: -0.01em; }
+.login-hero-desc { font-size: 14px; color: #a9b8cf; max-width: 460px; line-height: 1.55; margin: 0; }
+
+.hue-blue { color: #3ea6ff; }
+.hue-purple { color: #c084fc; }
+.hue-red { color: #f0576b; }
+.hue-orange { color: #fb923c; }
+
+.login-features { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; max-width: 620px; }
+.login-feature { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.login-feature-icon {
+  width: 40px; height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid currentColor;
+  background: var(--color-surface-alt);
+  box-shadow: 0 0 8px 0 currentColor;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.login-feature-icon svg { width: 18px; height: 18px; filter: drop-shadow(0 0 2px currentColor); }
+.login-feature strong { font-size: 12.5px; font-weight: 700; color: #e8edf7; line-height: 1.3; }
+.login-feature span { font-size: 11px; color: #8496ae; line-height: 1.3; }
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  justify-self: end;
+  padding: 28px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: rgba(10,15,26,0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(160,150,255,0.22);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px rgba(62,166,255,0.06), 0 24px 60px rgba(0,0,0,0.55), 0 0 40px rgba(139,92,246,0.10);
+}
+.login-card h1 { font-size: 21px; margin: 0; color: #f2f5fb; }
+.login-card p { color: #8496ae; font-size: 13.5px; margin: 0; }
+
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.login-logo { width: 60px; height: 60px; object-fit: contain; }
 .login-brand .brand-text { align-items: center; }
-.login-brand .brand-text strong { font-size: 16px; }
+.login-brand .brand-text strong { font-size: 17px; font-weight: 800; color: #f2f5fb; }
+.login-brand .brand-text .brand-tech { text-align: center; }
+
+.login-heading { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 4px; }
+
+.login-shell .field-group { margin-bottom: 0; gap: 7px; }
+.login-shell .field-group label { color: #c3cfe0; font-size: 12.5px; }
+
+.login-input-wrap { position: relative; display: flex; align-items: center; }
+.login-input-icon { position: absolute; left: 13px; width: 16px; height: 16px; color: #6f81a0; pointer-events: none; }
+.login-shell .input.login-input {
+  width: 100%;
+  padding-left: 40px;
+  background: rgba(255,255,255,0.03);
+  border-color: rgba(160,150,255,0.18);
+  color: #eef2fa;
+}
+.login-shell .input.login-input::placeholder { color: #5c6d88; }
+.login-shell .input.login-input:focus { border-color: #3ea6ff; box-shadow: 0 0 0 3px rgba(62,166,255,0.18); }
+.login-shell .input.login-input-has-toggle { padding-right: 40px; }
+
+.login-input-toggle {
+  position: absolute; right: 8px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; color: #6f81a0; border-radius: 8px;
+  transition: color 150ms ease, background 150ms ease;
+}
+.login-input-toggle svg { width: 17px; height: 17px; }
+.login-input-toggle:hover { color: #c3cfe0; background: rgba(255,255,255,0.06); }
+
+.login-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.login-remember { font-size: 12.5px; color: #a9b8cf; }
+.login-link-muted { font-size: 12.5px; color: #8b7fd6; }
+
+.login-submit {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%;
+  padding: 12px 18px;
+  border: none; border-radius: 999px;
+  background: linear-gradient(90deg, #2f6fe0, #8b5cf6);
+  color: #fff;
+  font-size: 14.5px; font-weight: 700;
+  box-shadow: 0 10px 26px rgba(88,80,236,0.35);
+  transition: transform 150ms ease, box-shadow 150ms ease, filter 150ms ease;
+}
+.login-submit svg { width: 17px; height: 17px; }
+.login-submit:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 14px 30px rgba(88,80,236,0.45); }
+.login-submit:active { transform: translateY(0) scale(0.98); }
+
+.login-footer { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 2px; }
+.login-footer::before { content: ''; position: absolute; top: 9px; left: 0; right: 0; height: 1px; background: rgba(160,150,255,0.16); }
+.login-footer-badge {
+  position: relative; z-index: 1;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #0d1220; border: 1px solid rgba(160,150,255,0.22);
+  color: #8496ae;
+  display: flex; align-items: center; justify-content: center;
+}
+.login-footer-badge svg { width: 11px; height: 11px; }
+.login-footer-text { font-size: 12px; color: #7688a3; }
+
+/* Login always renders in the dark theme -- it has no toggle and ignores
+   any stored preference (see login.html), so it needs no [data-theme="light"]
+   counterparts. */
+
+/* Below 900px there isn't room for the hero copy and the card without
+   scrolling, so the decorative hero drops out entirely -- only the
+   sign-in card remains, centered over the same background image. */
+@media (max-width: 900px) {
+  .login-shell { padding: 24px; }
+  .login-content { grid-template-columns: 1fr; max-width: 420px; }
+  .login-hero { display: none; }
+  .login-card { max-width: 100%; justify-self: stretch; }
+}
+
+/* Shorter viewports (small laptops, landscape tablets/phones): compress
+   vertical rhythm on both panels so nothing needs to scroll. */
+@media (max-height: 760px) {
+  .login-shell { padding: 20px 56px; }
+  .login-hero-top { gap: 10px; }
+  .login-tagline { font-size: 20px; margin-top: 0; }
+  .login-hero-desc { font-size: 13px; }
+  .login-features { gap: 10px; }
+  .login-feature-icon { width: 34px; height: 34px; }
+  .login-feature-icon svg { width: 15px; height: 15px; }
+  .login-card { padding: 18px 30px; gap: 10px; }
+  .login-logo { width: 44px; height: 44px; }
+  .login-card h1 { font-size: 18px; }
+}
+/* Very short laptop viewports (e.g. 1366x768 minus browser chrome): compress
+   further still, but keep every element visible -- nothing gets hidden. */
+@media (max-height: 660px) {
+  .login-shell { padding: 14px 56px; }
+  .login-hero-top { gap: 6px; }
+  .login-hero-brand { gap: 10px; }
+  .login-hero-logo { width: 38px; height: 38px; }
+  .login-hero-brandtext strong { font-size: 17px; }
+  .login-divider { height: 2px; }
+  .login-tagline { font-size: 17px; gap: 6px; }
+  .login-hero-desc { font-size: 12px; line-height: 1.35; }
+  .login-features { gap: 8px; }
+  .login-feature { gap: 4px; }
+  .login-feature-icon { width: 28px; height: 28px; border-radius: 9px; }
+  .login-feature-icon svg { width: 13px; height: 13px; }
+  .login-feature strong { font-size: 11px; }
+  .login-feature span { font-size: 10px; }
+  .login-card { padding: 14px 26px; gap: 7px; }
+  .login-logo { width: 36px; height: 36px; }
+  .login-brand { gap: 6px; }
+  .login-card h1 { font-size: 16px; }
+  .login-heading { margin-top: 0; gap: 2px; }
+  .login-shell .field-group { gap: 4px; }
+  .login-footer { margin-top: 0; gap: 6px; }
+}
 
 /* ── Utility ─────────────────────────────────────────────────────── */
 
@@ -643,7 +1103,7 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
   .sidebar.open { transform: translateX(0); }
   html.sidebar-hover .main, html.sidebar-pinned .main, .main { margin-left: 0; width: 100%; }
   .content { padding: var(--space-4); }
-  html.sidebar-hover .stat-grid, html.sidebar-pinned .stat-grid, .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .topbar { height: auto; min-height: var(--topbar-h); padding: var(--space-3) var(--space-4); }
   .topbar-statuses { gap: var(--space-2); }
   .topbar-meta { display: none; }
@@ -662,10 +1122,33 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
   .retry-empty-row { border: 0 !important; }
   .retry-empty-row td { display: block !important; border: 1px solid var(--color-border) !important; }
   .retry-empty-row td::before { content: none !important; }
+
+  .alerts-table,
+  .alerts-table tbody { display: block; width: 100%; }
+  .alerts-table colgroup,
+  .alerts-table thead { display: none; }
+  .alerts-table tbody tr { display: block; margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); }
+  .alerts-table tbody td { display: grid; grid-template-columns: minmax(105px, 36%) minmax(0, 1fr); align-items: start; gap: var(--space-3); width: 100%; padding: 10px 12px; white-space: normal !important; border-bottom: 1px solid var(--color-border); text-align: left; }
+  .alerts-table tbody td::before { content: attr(data-label); color: var(--color-muted); font-family: var(--font-sans); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .alerts-table tbody td:last-child { border-bottom: 0; }
+  .alerts-table tbody td.selection-cell { display: block; padding: 10px 12px; }
+  .alerts-table tbody td.selection-cell::before { content: none; }
+
+  .endpoints-table,
+  .endpoints-table tbody { display: block; width: 100%; }
+  .endpoints-table colgroup,
+  .endpoints-table thead { display: none; }
+  .endpoints-table tbody tr { display: block; margin-bottom: var(--space-4); overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); }
+  .endpoints-table tbody td { display: grid; grid-template-columns: minmax(105px, 36%) minmax(0, 1fr); align-items: start; gap: var(--space-3); width: 100%; padding: 10px 12px; white-space: normal !important; border-bottom: 1px solid var(--color-border); text-align: left; }
+  .endpoints-table tbody td::before { content: attr(data-label); color: var(--color-muted); font-family: var(--font-sans); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .endpoints-table tbody td:last-child { border-bottom: 0; }
+  .endpoints-table tbody td.table-actions { display: block; }
+  .endpoints-table tbody td.table-actions::before { display: block; margin-bottom: 6px; }
 }
 
 @media (max-width: 640px) {
-  html.sidebar-hover .stat-grid, html.sidebar-pinned .stat-grid, .stat-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; }
+  .content { padding: 16px; }
 }
 
 /* Alert details */

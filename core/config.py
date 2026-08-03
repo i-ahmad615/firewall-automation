@@ -95,6 +95,11 @@ class AppConfig:
     admin_username: str = "admin"
     admin_password: str = ""
 
+    # Branding -- shown in the sidebar, topbar, login page, and page titles.
+    # Change ORG_NAME / APP_NAME in .env to rebrand the whole dashboard.
+    org_name: str = "CPBM"
+    app_name: str = "SecOps"
+
 
 def _env_bool(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
@@ -327,6 +332,8 @@ def load_config() -> AppConfig:
         auto_open_browser=_env_bool("DASHBOARD_AUTO_OPEN_BROWSER", "true"),
         admin_username=os.environ.get("DASHBOARD_ADMIN_USERNAME", "admin").strip(),
         admin_password=os.environ.get("DASHBOARD_ADMIN_PASSWORD", "").strip(),
+        org_name=os.environ.get("ORG_NAME", "").strip() or "CPBM",
+        app_name=os.environ.get("APP_NAME", "").strip() or "SecOps",
     )
 
 

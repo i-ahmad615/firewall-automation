@@ -27,6 +27,32 @@
   });
 })();
 
+// ── Dark/light theme toggle (topbar, all pages) ─────────────────────────────
+// The pre-paint script in <head> already applied the stored theme before
+// first render (see base.html); this just wires the button to flip it.
+(function initThemeToggle() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+
+  const root = document.documentElement;
+  const label = (light) => `Switch to ${light ? 'dark' : 'light'} theme`;
+
+  function apply(light) {
+    root.setAttribute('data-theme', light ? 'light' : 'dark');
+    btn.setAttribute('aria-pressed', String(light));
+    btn.setAttribute('title', label(light));
+    btn.setAttribute('aria-label', label(light));
+  }
+
+  apply(root.getAttribute('data-theme') === 'light');
+
+  btn.addEventListener('click', () => {
+    const light = root.getAttribute('data-theme') !== 'light';
+    apply(light);
+    try { localStorage.setItem('theme', light ? 'light' : 'dark'); } catch (e) {}
+  });
+})();
+
 // ── Firewall connectivity status pill (topbar, all pages) ──────────────────
 function initConnectivityStatus(service, displayName) {
   const pill = document.getElementById(`${service}-status-pill`);
@@ -113,12 +139,15 @@ function confirmDialog({ title = 'Are you sure?', message = '', confirmLabel = '
 }
 
 function tickClock() {
-  const el = document.getElementById('clock');
-  if (!el) return;
+  const timeEl = document.getElementById('clock-time');
+  const dateEl = document.getElementById('clock-date');
+  if (!timeEl || !dateEl) return;
   const now = new Date();
-  el.textContent = now.toLocaleString(undefined, {
+  // Split so CSS can show just the time in the collapsed sidebar rail and
+  // the full date alongside it once the sidebar is hovered/pinned open.
+  timeEl.textContent = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  dateEl.textContent = now.toLocaleDateString(undefined, {
     weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
   });
 }
 setInterval(tickClock, 1000 * 30);
@@ -189,6 +218,37 @@ function qs(params) {
 
 // ── Minimal SVG line/area chart (no external dependency) ─────────────────
 
+// Rounds a raw axis span up to a "nice" human-friendly number (1/2/5 x 10^n),
+// the same approach classic charting libraries use for auto-scaled axes.
+function niceAxisNumber(range, round) {
+  const exponent = Math.floor(Math.log10(range || 1));
+  const fraction = range / Math.pow(10, exponent);
+  let niceFraction;
+  if (round) {
+    if (fraction < 1.5) niceFraction = 1;
+    else if (fraction < 3) niceFraction = 2;
+    else if (fraction < 7) niceFraction = 5;
+    else niceFraction = 10;
+  } else {
+    if (fraction <= 1) niceFraction = 1;
+    else if (fraction <= 2) niceFraction = 2;
+    else if (fraction <= 5) niceFraction = 5;
+    else niceFraction = 10;
+  }
+  return niceFraction * Math.pow(10, exponent);
+}
+
+// Returns ascending tick values from 0 to a "nice" max that is >= maxVal,
+// so the y-axis scale always auto-adjusts to whatever the data's peak is.
+function niceAxisTicks(maxVal, tickCount = 4) {
+  if (maxVal <= 0) return [0, 1];
+  const step = niceAxisNumber(niceAxisNumber(maxVal, false) / (tickCount - 1), true) || 1;
+  const niceMax = Math.ceil(maxVal / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= niceMax + 1e-9; v += step) ticks.push(Math.round(v));
+  return ticks;
+}
+
 function drawLineChart(svgEl, data, opts = {}) {
   // Backward-compatible single-line shorthand: { color, valueKey, labelKey }
   const lines = opts.lines || [{ key: opts.valueKey || 'total', color: opts.color || '#5aa9e6' }];
@@ -197,7 +257,7 @@ function drawLineChart(svgEl, data, opts = {}) {
   svgEl.innerHTML = '';
   const width = svgEl.clientWidth || 600;
   const height = svgEl.clientHeight || 220;
-  const padding = { top: 16, right: 12, bottom: 26, left: 12 };
+  const padding = { top: 16, right: 12, bottom: 26, left: 30 };
   const w = width - padding.left - padding.right;
   const h = height - padding.top - padding.bottom;
 
@@ -216,12 +276,36 @@ function drawLineChart(svgEl, data, opts = {}) {
   }
 
   const ns = 'http://www.w3.org/2000/svg';
-  const maxVal = Math.max(1, ...lines.flatMap(l => data.map(d => d[l.key] || 0)));
+  const rawMax = Math.max(1, ...lines.flatMap(l => data.map(d => d[l.key] || 0)));
+  const yTicks = niceAxisTicks(rawMax);
+  const axisMax = yTicks[yTicks.length - 1];
   const stepX = data.length > 1 ? w / (data.length - 1) : 0;
   const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const xFor = (i) => padding.left + i * stepX;
-  const yFor = (v) => padding.top + h - (v / maxVal) * h;
+  const yFor = (v) => padding.top + h - (v / axisMax) * h;
+
+  // Y-axis: gridline + count label per tick, scaled to the data's own peak.
+  yTicks.forEach((tick) => {
+    const y = yFor(tick);
+    const gridline = document.createElementNS(ns, 'line');
+    gridline.setAttribute('x1', padding.left);
+    gridline.setAttribute('x2', width - padding.right);
+    gridline.setAttribute('y1', y);
+    gridline.setAttribute('y2', y);
+    gridline.setAttribute('stroke', 'var(--color-border)');
+    gridline.setAttribute('stroke-width', '1');
+    svgEl.appendChild(gridline);
+
+    const label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', padding.left - 8);
+    label.setAttribute('y', y + 3);
+    label.setAttribute('text-anchor', 'end');
+    label.setAttribute('font-size', '10');
+    label.setAttribute('fill', 'var(--color-muted)');
+    label.textContent = tick.toLocaleString();
+    svgEl.appendChild(label);
+  });
 
   lines.forEach((lineDef, lineIndex) => {
     const points = data.map((d, i) => [xFor(i), yFor(d[lineDef.key] || 0)]);
