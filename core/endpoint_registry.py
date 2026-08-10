@@ -75,12 +75,31 @@ class EndpointClassification:
 
 @dataclass(frozen=True)
 class EndpointDecision:
+    """Outcome of :func:`decide_endpoints`.
+
+    ``candidates`` holds every ``(side, ip)`` pair approved as a Sophos
+    block target -- zero, one, or (when both Origin and Impacted are
+    untrusted valid IPs) two. ``review_sides`` lists any side that is an
+    untrusted hostname or CIDR: never a block target, but flagged so
+    notifications can call out that it still needs manual review even when
+    the other side was successfully blocked.
+    """
+
     origin: EndpointClassification
     impacted: EndpointClassification
-    selected_candidate: Optional[str]
-    selected_side: Optional[str]
+    candidates: tuple[tuple[str, str], ...]
+    review_sides: tuple[str, ...]
     status: str
     reason: str
+
+    @property
+    def selected_candidate(self) -> Optional[str]:
+        """First (or only) block-target IP -- convenience for single-candidate callers."""
+        return self.candidates[0][1] if self.candidates else None
+
+    @property
+    def selected_side(self) -> Optional[str]:
+        return self.candidates[0][0] if self.candidates else None
 
 
 def normalize_hostname(value: str) -> str:
@@ -320,50 +339,116 @@ registry = ProtectedEndpointRegistry()
 _INVALID_TYPES = frozenset({"MISSING", "MASKED", "INVALID"})
 
 
+def _category(item: EndpointClassification) -> str:
+    """Classify one endpoint independently of the other side.
+
+    One of:
+      * ``"trusted"``         -- matched an active Protected Endpoint.
+      * ``"untrusted_ip"``    -- a valid, untrusted IP; the only category
+        ever eligible as a Sophos block target.
+      * ``"untrusted_nonip"`` -- a syntactically valid but untrusted
+        HOSTNAME or CIDR; never a block target, but flagged for review.
+      * ``"invalid"``         -- missing, masked, or malformed.
+    """
+    if item.is_trusted:
+        return "trusted"
+    if item.value_type == "IP":
+        return "untrusted_ip"
+    if item.value_type in ("HOSTNAME", "CIDR"):
+        return "untrusted_nonip"
+    return "invalid"
+
+
+# Single source of truth for the Origin/Impacted blocking policy. Each side
+# is classified independently (see `_category`) into one of 4 categories,
+# so the pair fully determines the outcome -- there are no other branches,
+# special cases, or precedence rules layered on top of this table.
+#
+# Values are (status, reason, block_sides) where block_sides is the subset
+# of {"origin", "impacted"} approved as Sophos block targets. Only a
+# category of "untrusted_ip" is ever included in block_sides -- a trusted
+# endpoint, an untrusted hostname/CIDR, and an invalid value are never sent
+# to Sophos.
+_T, _I, _N, _X = "trusted", "untrusted_ip", "untrusted_nonip", "invalid"
+
+_DECISION_TABLE: dict[tuple[str, str], tuple[str, str, frozenset[str]]] = {
+    (_T, _T): ("both_trusted",
+               "Both Origin and Impacted are trusted Protected Endpoints",
+               frozenset()),
+    (_T, _I): ("approved_for_blocking",
+               "Origin is trusted; Impacted is untrusted",
+               frozenset({"impacted"})),
+    (_I, _T): ("approved_for_blocking",
+               "Impacted is trusted; Origin is untrusted",
+               frozenset({"origin"})),
+    (_I, _I): ("approved_for_blocking",
+               "Neither Origin nor Impacted is a trusted Protected Endpoint; "
+               "both are untrusted valid IPs and will be blocked",
+               frozenset({"origin", "impacted"})),
+    (_T, _N): ("untrusted_target_not_ip",
+               "Untrusted Impacted endpoint is not a valid IP and cannot be blocked",
+               frozenset()),
+    (_N, _T): ("untrusted_target_not_ip",
+               "Untrusted Origin endpoint is not a valid IP and cannot be blocked",
+               frozenset()),
+    (_N, _I): ("approved_for_blocking",
+               "Impacted is an untrusted valid IP and will be blocked; "
+               "Origin is an untrusted hostname/CIDR and requires manual review",
+               frozenset({"impacted"})),
+    (_I, _N): ("approved_for_blocking",
+               "Origin is an untrusted valid IP and will be blocked; "
+               "Impacted is an untrusted hostname/CIDR and requires manual review",
+               frozenset({"origin"})),
+    (_N, _N): ("both_untrusted",
+               "Neither Origin nor Impacted is a trusted Protected Endpoint, "
+               "and neither is a valid IP that can be blocked",
+               frozenset()),
+    (_X, _I): ("approved_for_blocking",
+               "Origin endpoint is missing, masked or malformed; "
+               "Impacted is an untrusted valid IP and will be blocked",
+               frozenset({"impacted"})),
+    (_I, _X): ("approved_for_blocking",
+               "Impacted endpoint is missing, masked or malformed; "
+               "Origin is an untrusted valid IP and will be blocked",
+               frozenset({"origin"})),
+    (_X, _T): ("incomplete_or_invalid_endpoint",
+               "Missing, masked, malformed or invalid endpoint", frozenset()),
+    (_T, _X): ("incomplete_or_invalid_endpoint",
+               "Missing, masked, malformed or invalid endpoint", frozenset()),
+    (_X, _N): ("incomplete_or_invalid_endpoint",
+               "Missing, masked, malformed or invalid endpoint", frozenset()),
+    (_N, _X): ("incomplete_or_invalid_endpoint",
+               "Missing, masked, malformed or invalid endpoint", frozenset()),
+    (_X, _X): ("incomplete_or_invalid_endpoint",
+               "Missing, masked, malformed or invalid endpoint", frozenset()),
+}
+
+
 def decide_endpoints(origin_value: Optional[str], impacted_value: Optional[str]) -> EndpointDecision:
-    """Binary trusted-vs-untrusted blocking decision.
+    """Origin/Impacted blocking decision, driven entirely by ``_DECISION_TABLE``.
 
-    1. Trusted Origin + untrusted Impacted (valid IP)   -> block Impacted.
-    2. Untrusted Origin (valid IP) + trusted Impacted    -> block Origin.
-    3. Trusted Origin + trusted Impacted                 -> review, block neither.
-    4. Untrusted Origin + untrusted Impacted             -> review, block neither.
-    5. Missing/masked/malformed/identical/CIDR-only, or an untrusted side
-       that is not a valid IP (hostname-only)             -> review, block neither.
-
-    A hostname or CIDR is never returned as ``selected_candidate`` -- only a
-    validated IP address may be selected as a block target.
+    Origin and Impacted are classified independently; a value present in
+    the Protected Endpoints registry is always TRUSTED and never blocked.
+    Only a validated, untrusted IP address is ever selected as a block
+    target -- a hostname, CIDR, or missing/masked/malformed value is never
+    sent to Sophos, regardless of the other side's trust state.
     """
     origin = registry.classify_endpoint(origin_value)
     impacted = registry.classify_endpoint(impacted_value)
+    origin_cat = _category(origin)
+    impacted_cat = _category(impacted)
+    status, reason, block_sides = _DECISION_TABLE[(origin_cat, impacted_cat)]
 
-    if origin.value_type in _INVALID_TYPES or impacted.value_type in _INVALID_TYPES:
-        return EndpointDecision(origin, impacted, None, None, "incomplete_or_invalid_endpoint",
-                                "Missing, masked, malformed or invalid endpoint")
-    if origin.normalized_value == impacted.normalized_value:
-        return EndpointDecision(origin, impacted, None, None, "same_endpoint",
-                                "Origin and Impacted endpoints are identical")
-    if origin.value_type == "CIDR" or impacted.value_type == "CIDR":
-        return EndpointDecision(origin, impacted, None, None, "cidr_endpoint_review",
-                                "A CIDR value cannot establish trust or be selected as a block target")
+    candidates: list[tuple[str, str]] = []
+    seen_ips: set[str] = set()
+    for side, classification in (("origin", origin), ("impacted", impacted)):
+        if side in block_sides and classification.normalized_value not in seen_ips:
+            candidates.append((side, classification.normalized_value))
+            seen_ips.add(classification.normalized_value)
 
-    if origin.is_trusted and impacted.is_trusted:
-        return EndpointDecision(origin, impacted, None, None, "both_trusted",
-                                "Both Origin and Impacted are trusted Protected Endpoints")
-    if not origin.is_trusted and not impacted.is_trusted:
-        return EndpointDecision(origin, impacted, None, None, "both_untrusted",
-                                "Neither Origin nor Impacted is a trusted Protected Endpoint")
+    review_sides = tuple(
+        side for side, cat in (("origin", origin_cat), ("impacted", impacted_cat))
+        if cat == "untrusted_nonip"
+    )
 
-    if origin.is_trusted:
-        # Origin trusted, Impacted untrusted.
-        if impacted.value_type != "IP":
-            return EndpointDecision(origin, impacted, None, None, "untrusted_target_not_ip",
-                                    "Untrusted Impacted endpoint is not a valid IP and cannot be blocked")
-        return EndpointDecision(origin, impacted, impacted.normalized_value, "impacted",
-                                "approved_for_blocking", "Origin is trusted; Impacted is untrusted")
-
-    # Impacted trusted, Origin untrusted.
-    if origin.value_type != "IP":
-        return EndpointDecision(origin, impacted, None, None, "untrusted_target_not_ip",
-                                "Untrusted Origin endpoint is not a valid IP and cannot be blocked")
-    return EndpointDecision(origin, impacted, origin.normalized_value, "origin",
-                            "approved_for_blocking", "Impacted is trusted; Origin is untrusted")
+    return EndpointDecision(origin, impacted, tuple(candidates), review_sides, status, reason)

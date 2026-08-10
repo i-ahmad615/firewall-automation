@@ -1104,6 +1104,16 @@ def record_retry_attempt(ip: str, error: str) -> None:
         conn.commit()
 
 
+# `selected_candidate` holds one IP for a single-block-target alert, or two
+# comma-joined IPs when both Origin and Impacted were untrusted valid IPs
+# and both were sent to Sophos. This fragment matches *ip* against either
+# case -- dots in an IP are not LIKE wildcards, so this is a safe substring
+# match, never a false positive across unrelated IPs.
+_CANDIDATE_MATCH_SQL = (
+    "(',' || COALESCE(NULLIF(selected_candidate, ''), origin_ip) || ',') LIKE ('%,' || ? || ',%')"
+)
+
+
 def cancel_pending_block(ip: str) -> bool:
     """Permanently cancel the retry job for *ip*.
 
@@ -1120,14 +1130,14 @@ def cancel_pending_block(ip: str) -> bool:
     with _lock, _connect() as conn:
         cursor = conn.execute("DELETE FROM pending_blocks WHERE ip = ?", (ip,))
         removed = cursor.rowcount > 0
-        # Match on the actual selected block candidate (Origin or Impacted),
-        # falling back to origin_ip for rows recorded before that column
-        # existed -- never assume Origin was the retry target.
+        # Match on the actual selected block candidate(s) (Origin, Impacted,
+        # or both), falling back to origin_ip for rows recorded before that
+        # column existed -- never assume Origin was the retry target.
         conn.execute(
             "UPDATE alerts SET action_taken = 'removed', "
             "processing_status = 'manually_resolved', "
             "reason = 'Retry cancelled by administrator', updated_at = ? "
-            "WHERE COALESCE(NULLIF(selected_candidate, ''), origin_ip) = ? "
+            f"WHERE {_CANDIDATE_MATCH_SQL} "
             "AND action_taken = 'failed'",
             (_utcnow(), ip),
         )
@@ -1184,33 +1194,66 @@ def resolve_pending_block(ip: str, new_result: str, notified: bool = False) -> N
     Alert Volume chart all reflect the resolved outcome), clears the stale
     failure rows from ``firewall_actions`` (so the Failed Blocks KPI drops
     accordingly), and removes the retry reservation.
+
+    An alert whose ``selected_candidate`` holds two IPs (Origin and
+    Impacted were both untrusted valid IPs) is only flipped to its final
+    resolved status once *every* candidate has cleared the retry queue --
+    resolving one candidate while its sibling is still pending only updates
+    the alert's audit trail, not its terminal outcome.
     """
     if _db_path is None:
         return
     with _lock, _connect() as conn:
-        # Match on the actual selected block candidate (Origin or Impacted),
-        # falling back to origin_ip for rows recorded before that column
-        # existed -- never assume Origin was the retry target.
-        conn.execute(
-            "UPDATE alerts SET action_taken = ?, reason = ?, "
-            "processing_status = CASE ? "
-            "WHEN 'blocked' THEN 'blocked_successfully' "
-            "WHEN 'duplicate' THEN 'already_blocked' "
-            "WHEN 'allowed' THEN 'allowlisted' "
-            "ELSE processing_status END, "
-            "notification_sent = CASE WHEN ? THEN 1 ELSE notification_sent END, "
-            "updated_at = ? "
-            "WHERE COALESCE(NULLIF(selected_candidate, ''), origin_ip) = ? "
-            "AND action_taken = 'failed'",
-            (
-                new_result,
-                f"Resolved on retry -- candidate {ip} now {new_result}",
-                new_result,
-                int(notified),
-                _utcnow(),
-                ip,
-            ),
-        )
+        # Match on the actual selected block candidate(s) (Origin,
+        # Impacted, or both), falling back to origin_ip for rows recorded
+        # before that column existed -- never assume Origin was the target.
+        rows = conn.execute(
+            f"SELECT id, selected_candidate, origin_ip FROM alerts "
+            f"WHERE {_CANDIDATE_MATCH_SQL} AND action_taken = 'failed'",
+            (ip,),
+        ).fetchall()
+        now = _utcnow()
+        for row in rows:
+            raw_candidates = row["selected_candidate"] or row["origin_ip"] or ""
+            other_candidates = [
+                c.strip() for c in raw_candidates.split(",") if c.strip() and c.strip() != ip
+            ]
+            still_pending = False
+            if other_candidates:
+                placeholders = ",".join("?" for _ in other_candidates)
+                still_pending = conn.execute(
+                    f"SELECT 1 FROM pending_blocks WHERE ip IN ({placeholders}) LIMIT 1",
+                    other_candidates,
+                ).fetchone() is not None
+            if still_pending:
+                conn.execute(
+                    "UPDATE alerts SET reason = ?, updated_at = ? WHERE id = ?",
+                    (
+                        f"Candidate {ip} resolved ({new_result}); "
+                        f"still awaiting {', '.join(other_candidates)}",
+                        now,
+                        row["id"],
+                    ),
+                )
+                continue
+            conn.execute(
+                "UPDATE alerts SET action_taken = ?, reason = ?, "
+                "processing_status = CASE ? "
+                "WHEN 'blocked' THEN 'blocked_successfully' "
+                "WHEN 'duplicate' THEN 'already_blocked' "
+                "WHEN 'allowed' THEN 'allowlisted' "
+                "ELSE processing_status END, "
+                "notification_sent = CASE WHEN ? THEN 1 ELSE notification_sent END, "
+                "updated_at = ? WHERE id = ?",
+                (
+                    new_result,
+                    f"Resolved on retry -- candidate {ip} now {new_result}",
+                    new_result,
+                    int(notified),
+                    now,
+                    row["id"],
+                ),
+            )
         conn.execute(
             "DELETE FROM firewall_actions WHERE ip = ? AND status = 'failure'", (ip,)
         )
@@ -1219,47 +1262,55 @@ def resolve_pending_block(ip: str, new_result: str, notified: bool = False) -> N
 
 
 def sync_pending_blocks_from_alerts() -> int:
-    """Reserve any ``failed`` alert whose candidate isn't already queued for retry.
+    """Reserve any ``failed`` alert candidate that isn't already queued for retry.
 
     Self-heals two situations: alerts that failed before the retry queue
     existed (e.g. recorded by an older version of this app), and any other
     reason a candidate marked ``failed`` fell out of sync with
     ``pending_blocks``.
 
-    The failed candidate is ``selected_candidate`` (the actual endpoint the
-    decision engine chose to block -- Origin *or* Impacted) rather than
+    The failed candidate(s) come from ``selected_candidate`` (the actual
+    endpoint(s) the decision engine chose to block -- Origin, Impacted, or
+    both, comma-joined when both were untrusted valid IPs) rather than
     always ``origin_ip``; older rows recorded before that column existed
-    fall back to ``origin_ip``. Returns the number of candidates newly
-    reserved.
+    fall back to ``origin_ip``. Done in Python rather than pure SQL because
+    a single alert can now list more than one candidate IP. Returns the
+    number of candidates newly reserved.
     """
     if _db_path is None:
         return 0
     with _lock, _connect() as conn:
         rows = conn.execute(
-            "SELECT a.id AS alert_id, "
-            "COALESCE(NULLIF(a.selected_candidate, ''), a.origin_ip) AS candidate_ip, "
-            "a.alarm_id AS alarm_id FROM alerts a "
-            "INNER JOIN ("
-            "  SELECT COALESCE(NULLIF(selected_candidate, ''), origin_ip) AS candidate_ip, "
-            "  MAX(id) AS max_id FROM alerts "
-            "  WHERE action_taken = 'failed' AND processing_status = 'processing_failed' "
-            "  AND COALESCE(NULLIF(selected_candidate, ''), origin_ip) != '' "
-            "  GROUP BY candidate_ip"
-            ") latest ON a.id = latest.max_id "
-            "WHERE COALESCE(NULLIF(a.selected_candidate, ''), a.origin_ip) "
-            "NOT IN (SELECT ip FROM pending_blocks)"
+            "SELECT id AS alert_id, alarm_id, "
+            "COALESCE(NULLIF(selected_candidate, ''), origin_ip) AS candidates "
+            "FROM alerts "
+            "WHERE action_taken = 'failed' AND processing_status = 'processing_failed' "
+            "AND COALESCE(NULLIF(selected_candidate, ''), origin_ip) != '' "
+            "ORDER BY id ASC"
         ).fetchall()
-        now = _utcnow()
+        existing = {r["ip"] for r in conn.execute("SELECT ip FROM pending_blocks").fetchall()}
+        # Latest alert wins per candidate IP, mirroring the previous
+        # MAX(id)-per-candidate grouping.
+        latest: dict[str, tuple[int, Optional[str]]] = {}
         for row in rows:
+            for candidate_ip in (c.strip() for c in row["candidates"].split(",") if c.strip()):
+                latest[candidate_ip] = (row["alert_id"], row["alarm_id"])
+
+        now = _utcnow()
+        reserved = 0
+        for candidate_ip, (alert_id, alarm_id) in latest.items():
+            if candidate_ip in existing:
+                continue
             conn.execute(
                 "INSERT INTO pending_blocks "
                 "(ip, first_failed_at, last_attempt_at, attempts, last_error, alarm_id, alert_id) "
                 "VALUES (?, ?, ?, 0, 'Recovered from historical failure', ?, ?) "
                 "ON CONFLICT(ip) DO NOTHING",
-                (row["candidate_ip"], now, now, row["alarm_id"], row["alert_id"]),
+                (candidate_ip, now, now, alarm_id, alert_id),
             )
+            reserved += 1
         conn.commit()
-        return len(rows)
+        return reserved
 
 
 # ──────────────────────────────────────────────────────────────────────────────

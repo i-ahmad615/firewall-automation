@@ -18,6 +18,7 @@ from core.email_monitor import (
     EmailMonitor,
     _extract_classification,
     _extract_html,
+    _extract_impacted_ip,
     _extract_origin_ip_from_html,
     _find_matching_keyword,
     _is_from_trusted_sender,
@@ -155,10 +156,20 @@ class TestExtractOriginIp:
 
     def test_handles_ip_with_trailing_count(self) -> None:
         html = (
-            "<table><tr><th>Origin IP</th><td>1.2.3.4 (3 hits)</td></tr></table>"
+            "<table><tr><th>Origin IP</th><td>1.2.3.4 (3)</td></tr></table>"
         )
         ip = _extract_origin_ip_from_html(html)
         assert ip == "1.2.3.4"
+
+    def test_does_not_strip_non_numeric_trailing_parenthetical(self) -> None:
+        # Only a trailing *numeric* count such as " (2)" is stripped at
+        # extraction time -- anything else in parentheses is left for the
+        # endpoint registry to classify (and reject, if malformed).
+        html = (
+            "<table><tr><th>Origin IP</th><td>1.2.3.4 (3 hits)</td></tr></table>"
+        )
+        ip = _extract_origin_ip_from_html(html)
+        assert ip == "1.2.3.4 (3 hits)"
 
     def test_host_origin_alias(self) -> None:
         html = (
@@ -173,6 +184,79 @@ class TestExtractOriginIp:
         )
         ip = _extract_origin_ip_from_html(html)
         assert ip == "9.8.7.6"
+
+    def test_ip_address_origin_label_variant(self) -> None:
+        # Real-world SOC template variant that doesn't match the old exact
+        # "origin ip" / "host (origin)" keyword set.
+        html = (
+            "<table><tr><td>IP Address (Origin)</td><td>85.217.140.51 (2)</td></tr></table>"
+        )
+        ip = _extract_origin_ip_from_html(html)
+        assert ip == "85.217.140.51"
+
+    def test_does_not_fall_back_to_unrelated_ip_in_document(self) -> None:
+        # No row is classified as origin, and an unrelated IP appears
+        # elsewhere in the document (e.g. inside free text) -- this must
+        # not be picked up as a guess.
+        html = (
+            "<table><tr><td>Description</td><td>seen from 203.0.113.9</td></tr></table>"
+        )
+        ip = _extract_origin_ip_from_html(html)
+        assert ip is None
+
+    def test_extracts_hostname_origin(self) -> None:
+        html = (
+            "<table><tr><td>IP Address (Origin)</td><td>data-center.century.local</td></tr></table>"
+        )
+        assert _extract_origin_ip_from_html(html) == "data-center.century.local"
+
+    def test_extracts_hostname_origin_with_trailing_count(self) -> None:
+        html = (
+            "<table><tr><td>IP Address (Origin)</td><td>data-center.century.local (2)</td></tr></table>"
+        )
+        assert _extract_origin_ip_from_html(html) == "data-center.century.local"
+
+    def test_extracts_ip_with_higher_trailing_count(self) -> None:
+        # Task example: `8.8.8.80 (25)` -> `8.8.8.80`.
+        html = "<table><tr><th>Origin IP</th><td>8.8.8.80 (25)</td></tr></table>"
+        assert _extract_origin_ip_from_html(html) == "8.8.8.80"
+
+
+class TestExtractImpactedIp:
+    def test_extracts_from_table_key_impacted_ip(self) -> None:
+        ip = _extract_impacted_ip(ALERT_TABLE_HTML)
+        assert ip == "192.168.20.50"
+
+    def test_ip_address_impacted_label_variant(self) -> None:
+        html = (
+            "<table><tr><td>IP Address (Impacted)</td><td>61.5.152.235 (2)</td></tr></table>"
+        )
+        ip = _extract_impacted_ip(html)
+        assert ip == "61.5.152.235"
+
+    def test_destination_and_target_aliases(self) -> None:
+        assert _extract_impacted_ip(
+            "<table><tr><th>Destination IP</th><td>1.1.1.1</td></tr></table>"
+        ) == "1.1.1.1"
+        assert _extract_impacted_ip(
+            "<table><tr><th>Target IP</th><td>2.2.2.2</td></tr></table>"
+        ) == "2.2.2.2"
+
+    def test_returns_none_when_no_matching_row(self) -> None:
+        html = "<table><tr><td>Description</td><td>10.0.0.9</td></tr></table>"
+        assert _extract_impacted_ip(html) is None
+
+    def test_extracts_hostname_impacted(self) -> None:
+        html = (
+            "<table><tr><td>IP Address (Impacted)</td><td>data-center.century.local</td></tr></table>"
+        )
+        assert _extract_impacted_ip(html) == "data-center.century.local"
+
+    def test_extracts_hostname_impacted_with_trailing_count(self) -> None:
+        html = (
+            "<table><tr><td>IP Address (Impacted)</td><td>data-center.century.local (2)</td></tr></table>"
+        )
+        assert _extract_impacted_ip(html) == "data-center.century.local"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -484,6 +568,186 @@ class TestEmailMonitorProcessing:
             monitor._process_message("6", raw)
 
         mock_block.assert_not_called()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Both Origin and Impacted untrusted valid IPs -- block both independently
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DUAL_UNTRUSTED_HTML = (
+    "<html><table>"
+    "<tr><th>Alarm ID</th><td>DUAL-1</td></tr>"
+    "<tr><th>Classification</th><td>Threat List Attack IP</td></tr>"
+    "<tr><th>Origin IP</th><td>203.0.113.10</td></tr>"
+    "<tr><th>Impacted IP</th><td>198.51.100.20</td></tr>"
+    "</table></html>"
+)
+
+
+class TestBlockBothUntrustedIps:
+    """Origin and Impacted are both untrusted valid IPs -- the per-side
+    trust policy blocks both independently instead of only reviewing."""
+
+    def test_both_untrusted_ips_are_each_blocked(self) -> None:
+        config = _make_config()
+        raw = _build_raw_email(
+            subject=SOC_SUBJECT, from_="alerts@company.com", html_body=_DUAL_UNTRUSTED_HTML,
+        )
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked") as mock_block:
+            with patch("core.email_monitor.send_notification"):
+                result = monitor._process_message("30", raw)
+
+        assert result == "blocked_successfully"
+        called_ips = {call.args[0] for call in mock_block.call_args_list}
+        assert called_ips == {"203.0.113.10", "198.51.100.20"}
+        assert mock_block.call_count == 2
+
+    def test_one_of_two_untrusted_ips_failing_is_queued_for_retry_and_marked_partial(self) -> None:
+        from core.rule_updater import RuleUpdateError
+
+        config = _make_config()
+        raw = _build_raw_email(
+            subject=SOC_SUBJECT, from_="alerts@company.com", html_body=_DUAL_UNTRUSTED_HTML,
+        )
+        monitor = EmailMonitor(config)
+
+        def _side_effect(ip, cfg):
+            if ip == "198.51.100.20":
+                raise RuleUpdateError("Firewall timeout")
+            return "blocked"
+
+        with patch("core.email_monitor.block_ip", side_effect=_side_effect):
+            with patch("core.email_monitor.send_notification"):
+                result = monitor._process_message("31", raw)
+
+        assert result == "partially_blocked"
+        # Only the failed candidate is queued for retry -- the succeeded
+        # one is never re-attempted.
+        assert database.get_pending_block("198.51.100.20") is not None
+        assert database.get_pending_block("203.0.113.10") is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Full pipeline: SOC email -> cleaned Origin/Impacted -> DB persistence.
+# Covers every IP/hostname combination on both sides, with and without the
+# trailing " (N)" SOC event count, including the exact bug-report example
+# (Origin `110.38.16.195 (2)`, Impacted `192.168.10.10 (2)`).
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _endpoint_alert_html(origin_value: str, impacted_value: str, alarm_id: str = "END-1") -> str:
+    return (
+        "<html><table>"
+        f"<tr><th>Alarm ID</th><td>{alarm_id}</td></tr>"
+        "<tr><th>Classification</th><td>Threat List Attack IP</td></tr>"
+        f"<tr><td>IP Address (Origin)</td><td>{origin_value}</td></tr>"
+        f"<tr><td>IP Address (Impacted)</td><td>{impacted_value}</td></tr>"
+        "</table></html>"
+    )
+
+
+def _latest_alert_row() -> dict:
+    with database._connect() as conn:
+        row = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None, "expected an alert row to have been recorded"
+    return dict(row)
+
+
+class TestEndpointExtractionPipeline:
+    def test_ip_origin_ip_impacted_with_trailing_counts(self) -> None:
+        """Exact example from the bug report."""
+        config = _make_config()
+        html = _endpoint_alert_html("110.38.16.195 (2)", "192.168.10.10 (2)")
+        raw = _build_raw_email(subject=SOC_SUBJECT, from_="alerts@company.com", html_body=html)
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked"):
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("100", raw)
+
+        row = _latest_alert_row()
+        assert row["origin_ip"] == "110.38.16.195"
+        assert row["impacted_ip"] == "192.168.10.10"
+        assert row["origin_type"] == "IP"
+        assert row["impacted_type"] == "IP"
+        assert row["origin_ownership"] == "untrusted"
+        assert row["impacted_ownership"] == "untrusted"
+
+    def test_ip_origin_hostname_impacted(self) -> None:
+        config = _make_config()
+        html = _endpoint_alert_html("203.0.113.55 (5)", "data-center.century.local (2)")
+        raw = _build_raw_email(subject=SOC_SUBJECT, from_="alerts@company.com", html_body=html)
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked"):
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("101", raw)
+
+        row = _latest_alert_row()
+        assert row["origin_ip"] == "203.0.113.55"
+        assert row["impacted_ip"] == "data-center.century.local"
+        assert row["origin_type"] == "IP"
+        assert row["impacted_type"] == "HOSTNAME"
+
+    def test_hostname_origin_ip_impacted(self) -> None:
+        config = _make_config()
+        html = _endpoint_alert_html("attacker-host.evil.example (3)", "198.51.100.44 (25)")
+        raw = _build_raw_email(subject=SOC_SUBJECT, from_="alerts@company.com", html_body=html)
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked"):
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("102", raw)
+
+        row = _latest_alert_row()
+        assert row["origin_ip"] == "attacker-host.evil.example"
+        assert row["impacted_ip"] == "198.51.100.44"
+        assert row["origin_type"] == "HOSTNAME"
+        assert row["impacted_type"] == "IP"
+
+    def test_hostname_origin_hostname_impacted(self) -> None:
+        config = _make_config()
+        html = _endpoint_alert_html("attacker-host.evil.example (1)", "data-center.century.local (2)")
+        raw = _build_raw_email(subject=SOC_SUBJECT, from_="alerts@company.com", html_body=html)
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked"):
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("103", raw)
+
+        row = _latest_alert_row()
+        assert row["origin_ip"] == "attacker-host.evil.example"
+        assert row["impacted_ip"] == "data-center.century.local"
+        assert row["origin_type"] == "HOSTNAME"
+        assert row["impacted_type"] == "HOSTNAME"
+
+    def test_impacted_is_never_derived_from_origin_or_firewall_action(self) -> None:
+        """Reproduces the exact reported bug: Origin is the untrusted IP that
+        gets selected as the firewall block candidate, and Impacted is a
+        *trusted* IP that is never blocked. Impacted must still display its
+        real parsed value -- never blank/'-' and never copied from Origin
+        or from the block candidate."""
+        config = _make_config()
+        # 192.168.20.0/24 is registered as a trusted Protected Endpoint by
+        # _make_config(), so Impacted here is trusted and never blocked --
+        # only Origin becomes the selected_candidate.
+        html = _endpoint_alert_html("203.0.113.77 (4)", "192.168.20.50 (1)")
+        raw = _build_raw_email(subject=SOC_SUBJECT, from_="alerts@company.com", html_body=html)
+        monitor = EmailMonitor(config)
+
+        with patch("core.email_monitor.block_ip", return_value="blocked"):
+            with patch("core.email_monitor.send_notification"):
+                monitor._process_message("104", raw)
+
+        row = _latest_alert_row()
+        assert row["origin_ip"] == "203.0.113.77"
+        assert row["impacted_ip"] == "192.168.20.50"
+        assert row["origin_ip"] != row["impacted_ip"]
+        assert row["selected_candidate"] == "203.0.113.77"
+        assert row["impacted_ownership"] == "trusted"
+        # Impacted must not be blank just because it wasn't the block target.
+        assert row["impacted_ip"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

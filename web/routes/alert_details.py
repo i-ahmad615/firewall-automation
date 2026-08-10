@@ -28,7 +28,37 @@ from .. import auth
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
 
-_IMPACTED_IP_ALIASES = frozenset({"impacted ip", "destination ip", "target ip", "host (impacted)"})
+_ENDPOINT_TYPE_LABELS: dict[str, str] = {
+    "IP": "IP",
+    "HOSTNAME": "Hostname",
+    "CIDR": "CIDR",
+    "MASKED": "Masked",
+    "INVALID": "Invalid",
+}
+_ENDPOINT_TRUST_LABELS: dict[str, str] = {
+    "trusted": "Trusted",
+    "untrusted": "Untrusted",
+    "unknown": "Unknown",
+}
+
+
+def _endpoint_side_info(alert: dict[str, Any], side: str) -> dict[str, Any]:
+    """Build the Origin/Impacted display block for one side of the alert.
+
+    Reads the endpoint already parsed and classified while the alert was
+    processed (``{side}_ip`` / ``{side}_type`` / ``{side}_ownership``) --
+    never re-derived from ``parsed_data`` or from which side happened to be
+    selected as the firewall block candidate, so Impacted displays
+    correctly even when Origin was the one blocked (and vice versa).
+    """
+    endpoint = (alert.get(f"{side}_ip") or "").strip() or None
+    value_type = (alert.get(f"{side}_type") or "").strip()
+    ownership = (alert.get(f"{side}_ownership") or "").strip()
+    return {
+        "endpoint": endpoint,
+        "type": _ENDPOINT_TYPE_LABELS.get(value_type, value_type or None),
+        "trust": _ENDPOINT_TRUST_LABELS.get(ownership, ownership or None),
+    }
 
 
 def _require_api_auth(request: Request) -> None:
@@ -117,8 +147,11 @@ def api_get_alert_detail(alert_id: int, request: Request):
     ip = (alert.get("origin_ip") or "").strip()
     # The actual block target may be Origin *or* Impacted -- never assume
     # Origin. Falls back to origin_ip for alerts recorded before
-    # selected_candidate existed.
-    block_candidate = (alert.get("selected_candidate") or "").strip() or ip
+    # selected_candidate existed. When both Origin and Impacted were
+    # blocked, selected_candidate holds both IPs comma-joined; this page
+    # shows retry/history detail for one target at a time, so the first is
+    # used as the representative candidate.
+    block_candidate = (alert.get("selected_candidate") or "").split(",")[0].strip() or ip
 
     email_raw = alert.get("email_body") or ""
     email = {
@@ -130,14 +163,12 @@ def api_get_alert_detail(alert_id: int, request: Request):
         "has_body": bool(email_raw),
     }
 
-    impacted_ip = next(
-        (v for k, v in parsed_data.items() if k.strip().lower() in _IMPACTED_IP_ALIASES and v),
-        None,
-    )
+    endpoints = {
+        "origin": _endpoint_side_info(alert, "origin"),
+        "impacted": _endpoint_side_info(alert, "impacted"),
+    }
 
     ip_info: dict[str, Any] = {
-        "origin_ip": ip or None,
-        "impacted_ip": impacted_ip,
         "block_candidate": block_candidate or None,
         "ip_type": None,
         "is_public": None,
@@ -197,6 +228,7 @@ def api_get_alert_detail(alert_id: int, request: Request):
         "alert": summary,
         "email": email,
         "parsed_data": parsed_data,
+        "endpoints": endpoints,
         "ip_info": ip_info,
         "validation": {
             "checks": validation_checks,

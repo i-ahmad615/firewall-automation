@@ -286,12 +286,17 @@ def send_notification(
     config: AppConfig,
     subject: str,
     body: str,
+    html_body: Optional[str] = None,
 ) -> None:
     """Send one notification email to ``config.notification_email``.
 
     The application sends a single message to the configured distribution or
     shared mailbox address. Recipient forwarding is handled by IT/mail rules —
     this code does not manage multiple recipients.
+
+    ``body`` is always sent as the plain-text part. When ``html_body`` is
+    given, it is attached as the ``text/html`` alternative so HTML-capable
+    clients render the styled version while others fall back to plain text.
 
     Raises
     ------
@@ -310,6 +315,8 @@ def send_notification(
     msg["To"] = to_addr
     msg["Subject"] = subject
     msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
 
     logger.info(
         "SMTP connecting to %s:%s (tls=%s, ssl=%s) to send notification",

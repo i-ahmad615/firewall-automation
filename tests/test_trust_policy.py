@@ -105,12 +105,14 @@ class TestFourMainCombinations:
         assert decision.selected_candidate is None
         assert decision.selected_side is None
 
-    def test_case4_both_untrusted_blocks_neither(self):
+    def test_case4_both_untrusted_valid_ips_blocks_both(self):
+        """Under the per-side independent trust policy, two untrusted valid
+        IPs are both approved for blocking (see the full 16-row truth table
+        in TestFullTruthTable)."""
         _add("192.168.250.0/24")  # unrelated entry so the registry isn't empty
         decision = decide_endpoints("203.0.113.50", "8.8.8.8")
-        assert decision.status == "both_untrusted"
-        assert decision.selected_candidate is None
-        assert decision.selected_side is None
+        assert decision.status == "approved_for_blocking"
+        assert set(decision.candidates) == {("origin", "203.0.113.50"), ("impacted", "8.8.8.8")}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -118,28 +120,45 @@ class TestFourMainCombinations:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class TestReviewRequiredEdgeCases:
-    def test_missing_endpoint_is_reviewed(self):
-        _add("192.168.250.0/24")
-        assert decide_endpoints("", "8.8.8.8").status == "incomplete_or_invalid_endpoint"
+    def test_missing_endpoint_paired_with_trusted_is_reviewed(self):
+        _add("192.168.20.0/24")
+        assert decide_endpoints("", "192.168.20.5").status == "incomplete_or_invalid_endpoint"
 
-    def test_masked_endpoint_is_reviewed(self):
-        _add("192.168.250.0/24")
-        assert decide_endpoints("masked", "8.8.8.8").status == "incomplete_or_invalid_endpoint"
+    def test_masked_endpoint_paired_with_trusted_is_reviewed(self):
+        _add("192.168.20.0/24")
+        assert decide_endpoints("masked", "192.168.20.5").status == "incomplete_or_invalid_endpoint"
 
-    def test_malformed_endpoint_is_reviewed(self):
-        _add("192.168.250.0/24")
-        decision = decide_endpoints("not an ip and not a hostname !!", "8.8.8.8")
+    def test_malformed_endpoint_paired_with_trusted_is_reviewed(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("not an ip and not a hostname !!", "192.168.20.5")
         assert decision.status == "incomplete_or_invalid_endpoint"
 
-    def test_identical_endpoints_are_reviewed(self):
-        _add("192.168.250.0/24")
-        assert decide_endpoints("8.8.8.8", "8.8.8.8").status == "same_endpoint"
+    def test_invalid_endpoint_paired_with_untrusted_ip_still_blocks_the_valid_ip(self):
+        """A missing/masked/malformed value on one side no longer blanks out
+        the whole decision -- if the other side is an untrusted valid IP,
+        it is still blocked (see the full truth table)."""
+        _add("192.168.250.0/24")  # unrelated entry so the registry isn't empty
+        decision = decide_endpoints("", "8.8.8.8")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("impacted", "8.8.8.8"),)
 
-    def test_cidr_only_endpoint_is_reviewed_even_when_trusted_pairing_would_otherwise_block(self):
+    def test_identical_untrusted_ips_are_deduplicated_into_one_block_candidate(self):
+        """Both sides are the same untrusted valid IP -- approved for
+        blocking, but attempted only once, not twice."""
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("8.8.8.8", "8.8.8.8")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("origin", "8.8.8.8"),)
+
+    def test_cidr_endpoint_is_never_a_block_target_but_does_not_suppress_the_other_side(self):
+        """A CIDR value is grouped with hostnames for policy purposes --
+        never trusted, never a Sophos target -- but it does not prevent
+        blocking a genuinely untrusted valid IP on the other side."""
         _add("192.168.20.0/24")
         decision = decide_endpoints("192.168.20.0/24", "8.8.8.8")
-        assert decision.status == "cidr_endpoint_review"
-        assert decision.selected_candidate is None
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("impacted", "8.8.8.8"),)
+        assert decision.review_sides == ("origin",)
 
     def test_hostname_only_untrusted_target_is_reviewed_not_blocked(self):
         """Trusted Origin + untrusted Impacted -- but Impacted is a hostname,
@@ -148,6 +167,121 @@ class TestReviewRequiredEdgeCases:
         decision = decide_endpoints("192.168.20.5", "unregistered-host.example")
         assert decision.status == "untrusted_target_not_ip"
         assert decision.selected_candidate is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The full 16-row Origin x Impacted truth table (4 categories per side:
+# trusted / untrusted valid IP / untrusted hostname-or-CIDR / invalid).
+# One test per row -- this table is the single source of truth for the
+# blocking policy, so every combination is exercised directly.
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestFullTruthTable:
+    def test_row1_trusted_trusted_blocks_neither(self):
+        _add("192.168.20.0/24")
+        _add("192.168.30.0/24")
+        decision = decide_endpoints("192.168.20.5", "192.168.30.5")
+        assert decision.status == "both_trusted"
+        assert decision.candidates == ()
+        assert decision.review_sides == ()
+
+    def test_row2_trusted_untrusted_ip_blocks_impacted(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("192.168.20.5", "8.8.8.8")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("impacted", "8.8.8.8"),)
+        assert decision.review_sides == ()
+
+    def test_row3_untrusted_ip_trusted_blocks_origin(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("8.8.8.8", "192.168.20.5")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("origin", "8.8.8.8"),)
+        assert decision.review_sides == ()
+
+    def test_row4_untrusted_ip_untrusted_ip_blocks_both(self):
+        _add("192.168.250.0/24")  # unrelated entry so the registry isn't empty
+        decision = decide_endpoints("8.8.8.8", "1.1.1.1")
+        assert decision.status == "approved_for_blocking"
+        assert set(decision.candidates) == {("origin", "8.8.8.8"), ("impacted", "1.1.1.1")}
+        assert decision.review_sides == ()
+
+    def test_row5_trusted_untrusted_hostname_blocks_neither(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("192.168.20.5", "unregistered-host.example")
+        assert decision.status == "untrusted_target_not_ip"
+        assert decision.candidates == ()
+        assert decision.review_sides == ("impacted",)
+
+    def test_row6_untrusted_hostname_trusted_blocks_neither(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("unregistered-host.example", "192.168.20.5")
+        assert decision.status == "untrusted_target_not_ip"
+        assert decision.candidates == ()
+        assert decision.review_sides == ("origin",)
+
+    def test_row7_untrusted_hostname_untrusted_ip_blocks_impacted(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("unregistered-host.example", "8.8.8.8")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("impacted", "8.8.8.8"),)
+        assert decision.review_sides == ("origin",)
+
+    def test_row8_untrusted_ip_untrusted_hostname_blocks_origin(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("8.8.8.8", "unregistered-host.example")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("origin", "8.8.8.8"),)
+        assert decision.review_sides == ("impacted",)
+
+    def test_row9_untrusted_hostname_untrusted_hostname_blocks_neither(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("unregistered-a.example", "unregistered-b.example")
+        assert decision.status == "both_untrusted"
+        assert decision.candidates == ()
+        assert set(decision.review_sides) == {"origin", "impacted"}
+
+    def test_row10_invalid_untrusted_ip_blocks_impacted(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("", "8.8.8.8")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("impacted", "8.8.8.8"),)
+
+    def test_row11_untrusted_ip_invalid_blocks_origin(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("8.8.8.8", "")
+        assert decision.status == "approved_for_blocking"
+        assert decision.candidates == (("origin", "8.8.8.8"),)
+
+    def test_row12_invalid_trusted_blocks_neither(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("masked", "192.168.20.5")
+        assert decision.status == "incomplete_or_invalid_endpoint"
+        assert decision.candidates == ()
+
+    def test_row13_trusted_invalid_blocks_neither(self):
+        _add("192.168.20.0/24")
+        decision = decide_endpoints("192.168.20.5", "masked")
+        assert decision.status == "incomplete_or_invalid_endpoint"
+        assert decision.candidates == ()
+
+    def test_row14_invalid_untrusted_hostname_blocks_neither(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("", "unregistered-host.example")
+        assert decision.status == "incomplete_or_invalid_endpoint"
+        assert decision.candidates == ()
+
+    def test_row15_untrusted_hostname_invalid_blocks_neither(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("unregistered-host.example", "")
+        assert decision.status == "incomplete_or_invalid_endpoint"
+        assert decision.candidates == ()
+
+    def test_row16_invalid_invalid_blocks_neither(self):
+        _add("192.168.250.0/24")
+        decision = decide_endpoints("", "masked")
+        assert decision.status == "incomplete_or_invalid_endpoint"
+        assert decision.candidates == ()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

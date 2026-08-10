@@ -156,7 +156,10 @@ def test_multiple_different_embedded_ips_are_rejected_safely():
     assert item.input == "pm7-itlab 192.168.10.249 gateway 192.168.10.1 (17)"
     assert item.value_type == "INVALID"
     assert "Multiple different IP" in item.reason
-    assert decision.status == "incomplete_or_invalid_endpoint"
+    # An invalid Origin no longer blanks out the whole decision -- Impacted
+    # is still an untrusted valid IP, so it is still blocked.
+    assert decision.status == "approved_for_blocking"
+    assert decision.candidates == (("impacted", "8.8.8.8"),)
 
 
 def test_disabled_endpoint_does_not_match_and_stays_untrusted():
@@ -168,7 +171,7 @@ def test_disabled_endpoint_does_not_match_and_stays_untrusted():
     assert item.validity == "valid"
 
 
-def test_decision_table_reflects_binary_trust_policy():
+def test_decision_table_reflects_per_side_trust_policy():
     _add("192.168.20.0/24")
     _add("9.9.9.9", EXTERNAL_ALLOWLIST)
     outbound = decide_endpoints("192.168.20.5", "8.8.8.8")
@@ -176,7 +179,11 @@ def test_decision_table_reflects_binary_trust_policy():
     assert (outbound.selected_side, outbound.selected_candidate) == ("impacted", "8.8.8.8")
     assert (inbound.selected_side, inbound.selected_candidate) == ("origin", "8.8.8.8")
     assert decide_endpoints("192.168.20.5", "192.168.20.6").status == "both_trusted"
-    assert decide_endpoints("8.8.8.8", "1.1.1.1").status == "both_untrusted"
+    # Two untrusted valid IPs are both approved for blocking (see the full
+    # 16-row truth table in tests/test_trust_policy.py::TestFullTruthTable).
+    both_untrusted_ips = decide_endpoints("8.8.8.8", "1.1.1.1")
+    assert both_untrusted_ips.status == "approved_for_blocking"
+    assert set(both_untrusted_ips.candidates) == {("origin", "8.8.8.8"), ("impacted", "1.1.1.1")}
     # Category no longer separates the two trusted endpoints -- both being
     # trusted (regardless of CENTURY_OWNED vs EXTERNAL_ALLOWLIST) means
     # neither is blocked and a review notification is sent.
@@ -184,16 +191,37 @@ def test_decision_table_reflects_binary_trust_policy():
     assert registry.classify_endpoint("9.9.9.9").is_trusted
 
 
+@pytest.mark.parametrize("origin,impacted,status,candidates", [
+    ("", "8.8.8.8", "approved_for_blocking", (("impacted", "8.8.8.8"),)),
+    ("8.8.8.8", "", "approved_for_blocking", (("origin", "8.8.8.8"),)),
+    ("masked", "8.8.8.8", "approved_for_blocking", (("impacted", "8.8.8.8"),)),
+    ("8.8.8.8", "8.8.8.8", "approved_for_blocking", (("origin", "8.8.8.8"),)),
+    ("unknown.example", "8.8.8.8", "approved_for_blocking", (("impacted", "8.8.8.8"),)),
+])
+def test_previously_non_blocking_decisions_now_block_the_valid_untrusted_ip(
+    origin, impacted, status, candidates
+):
+    """These combinations used to blank out the whole decision under the
+    old "any invalid/identical/untrusted-pairing anywhere -> review" rule.
+    Under the current per-side independent policy, a genuinely untrusted
+    valid IP is still blocked even when the other side is missing, masked,
+    identical, or an untrusted hostname."""
+    _add("192.168.250.0/24")
+    decision = decide_endpoints(origin, impacted)
+    assert decision.status == status
+    assert decision.candidates == candidates
+
+
 @pytest.mark.parametrize("origin,impacted,status", [
-    ("", "8.8.8.8", "incomplete_or_invalid_endpoint"),
-    ("8.8.8.8", "", "incomplete_or_invalid_endpoint"),
-    ("masked", "8.8.8.8", "incomplete_or_invalid_endpoint"),
-    ("8.8.8.8", "8.8.8.8", "same_endpoint"),
-    ("unknown.example", "8.8.8.8", "both_untrusted"),
+    ("masked", "192.168.250.5", "incomplete_or_invalid_endpoint"),
+    ("192.168.250.5", "masked", "incomplete_or_invalid_endpoint"),
+    ("unknown-a.example", "unknown-b.example", "both_untrusted"),
 ])
 def test_non_blocking_decisions(origin, impacted, status):
     _add("192.168.250.0/24")
-    assert decide_endpoints(origin, impacted).status == status
+    decision = decide_endpoints(origin, impacted)
+    assert decision.status == status
+    assert decision.candidates == ()
 
 
 def test_api_crud_filter_conflict_and_audit():

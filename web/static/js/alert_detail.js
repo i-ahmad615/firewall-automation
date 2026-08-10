@@ -58,9 +58,17 @@ function render(data) {
   emailBody.hidden = !data.email.has_body;
   document.getElementById('toggle-email').hidden = !data.email.has_body;
 
+  const endpoints = data.endpoints;
+  renderKV('endpoint-grid', [
+    ['Origin endpoint', endpoints.origin.endpoint, { copy: true }],
+    ['Origin type', endpoints.origin.type], ['Origin trust', endpoints.origin.trust],
+    ['Impacted endpoint', endpoints.impacted.endpoint, { copy: true }],
+    ['Impacted type', endpoints.impacted.type], ['Impacted trust', endpoints.impacted.trust],
+  ]);
+
   const ip = data.ip_info;
   renderKV('ip-grid', [
-    ['Extracted source IP', ip.origin_ip, { copy: true }], ['Impacted IP', ip.impacted_ip, { copy: true }],
+    ['Block candidate', ip.block_candidate, { copy: true }],
     ['IP type', ip.ip_type], ['Public IP', ip.is_public], ['Trusted', ip.is_trusted],
     ['Already blocked', ip.already_blocked], ['Sophos host object', ip.host_name],
     ['First seen', ip.first_seen, { date: true }], ['Last seen', ip.last_seen, { date: true }],

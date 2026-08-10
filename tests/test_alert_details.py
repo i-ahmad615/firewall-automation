@@ -53,6 +53,99 @@ def test_successful_alert_details_retrieval(fake_request):
     assert body["validation"]["decision"] == "approved"
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Extracted Endpoint Information: `endpoints.origin` / `endpoints.impacted`
+# must come from the alert's own origin_ip/impacted_ip/*_type/*_ownership
+# columns, independent of `parsed_data` label guessing and independent of
+# which side was actually selected as the firewall block candidate.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_endpoints_ip_origin_ip_impacted(fake_request):
+    alert_id = _alert(
+        origin_ip="110.38.16.195", origin_type="IP", origin_ownership="untrusted",
+        impacted_ip="192.168.10.10", impacted_type="IP", impacted_ownership="untrusted",
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["origin"] == {"endpoint": "110.38.16.195", "type": "IP", "trust": "Untrusted"}
+    assert body["endpoints"]["impacted"] == {"endpoint": "192.168.10.10", "type": "IP", "trust": "Untrusted"}
+
+
+def test_endpoints_ip_origin_hostname_impacted(fake_request):
+    alert_id = _alert(
+        origin_ip="203.0.113.55", origin_type="IP", origin_ownership="untrusted",
+        impacted_ip="data-center.century.local", impacted_type="HOSTNAME", impacted_ownership="trusted",
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["origin"]["type"] == "IP"
+    assert body["endpoints"]["impacted"] == {
+        "endpoint": "data-center.century.local", "type": "Hostname", "trust": "Trusted",
+    }
+
+
+def test_endpoints_hostname_origin_ip_impacted(fake_request):
+    alert_id = _alert(
+        origin_ip="attacker-host.evil.example", origin_type="HOSTNAME", origin_ownership="untrusted",
+        impacted_ip="198.51.100.44", impacted_type="IP", impacted_ownership="untrusted",
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["origin"] == {
+        "endpoint": "attacker-host.evil.example", "type": "Hostname", "trust": "Untrusted",
+    }
+    assert body["endpoints"]["impacted"]["type"] == "IP"
+
+
+def test_endpoints_hostname_origin_hostname_impacted(fake_request):
+    alert_id = _alert(
+        origin_ip="attacker-host.evil.example", origin_type="HOSTNAME", origin_ownership="untrusted",
+        impacted_ip="data-center.century.local", impacted_type="HOSTNAME", impacted_ownership="trusted",
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["origin"]["type"] == "Hostname"
+    assert body["endpoints"]["impacted"]["type"] == "Hostname"
+
+
+def test_impacted_endpoint_not_derived_from_parsed_data_aliases(fake_request):
+    """Regression for the reported bug: Impacted must come from the stored
+    ``impacted_ip`` column, never re-derived by guessing at parsed_data
+    label spellings. A real-world SOC template label ("IP Address
+    (Impacted)") that the old alias-matching code did not recognize must
+    not cause Impacted to be reported missing when it was actually parsed
+    and stored."""
+    alert_id = _alert(
+        origin_ip="203.0.113.77", origin_type="IP", origin_ownership="untrusted",
+        impacted_ip="192.168.20.50", impacted_type="IP", impacted_ownership="trusted",
+        parsed_data=json.dumps({
+            "Alarm ID": "ALM-42",
+            "IP Address (Impacted)": "192.168.20.50 (1)",  # label the old alias set missed
+        }),
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["impacted"]["endpoint"] == "192.168.20.50"
+    assert body["endpoints"]["impacted"]["trust"] == "Trusted"
+
+
+def test_endpoints_survive_even_when_origin_was_the_block_candidate(fake_request):
+    """Origin is the selected_candidate (blocked); Impacted is trusted and
+    never blocked. Impacted must still render its real value, not '-'."""
+    alert_id = _alert(
+        origin_ip="203.0.113.77", origin_type="IP", origin_ownership="untrusted",
+        impacted_ip="192.168.20.50", impacted_type="IP", impacted_ownership="trusted",
+        selected_candidate="203.0.113.77",
+    )
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["ip_info"]["block_candidate"] == "203.0.113.77"
+    assert body["endpoints"]["impacted"]["endpoint"] == "192.168.20.50"
+
+
+def test_endpoints_missing_fields_render_as_none(fake_request):
+    """Legacy alerts recorded before Origin/Impacted classification existed
+    must not error -- fields render as None (displayed as '-' by the UI)."""
+    alert_id = database.record_alert(subject="Legacy", sender="old@example.com")
+    body = api_get_alert_detail(alert_id, fake_request)
+    assert body["endpoints"]["origin"] == {"endpoint": None, "type": None, "trust": None}
+    assert body["endpoints"]["impacted"] == {"endpoint": None, "type": None, "trust": None}
+
+
 def test_alert_not_found(fake_request):
     with pytest.raises(HTTPException) as exc_info:
         api_get_alert_detail(999999, fake_request)
