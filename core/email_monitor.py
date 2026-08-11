@@ -401,6 +401,8 @@ def _render_notification(
     """
     color = _STATUS_COLORS.get(status, "#374151")
     populated = [(label, value) for label, value in rows if value is not None]
+    timestamp = datetime.now().astimezone().strftime("%Y-%m-%d %I:%M %p")
+    heading_with_time = f"{heading} at {timestamp}"
     top_notice = (
         "This is an automated security notification generated in response "
         f"to SOC Alarm ID: {alarm_id or 'Unavailable'}."
@@ -410,7 +412,7 @@ def _render_notification(
         f"Security Alert & Firewall Automation System - {config.app_name}."
     )
 
-    plain_lines = [f"{status} -- {heading}", "", top_notice, ""]
+    plain_lines = [f"{status} -- {heading_with_time}", "", top_notice, ""]
     plain_lines.extend(f"{label}: {value}" for label, value in populated)
     plain_lines.extend(["", footer])
     plain_text = "\n".join(plain_lines)
@@ -440,7 +442,7 @@ def _render_notification(
         f'<td style="background-color:{color};color:#ffffff;padding:16px 20px;'
         'font-size:16px;font-weight:700;letter-spacing:0.3px;">'
         f"{_html_escape(status)}"
-        f'<div style="font-weight:400;font-size:13px;margin-top:2px;opacity:0.9;">{_html_escape(heading)}</div>'
+        f'<div style="font-weight:400;font-size:13px;margin-top:2px;opacity:0.9;">{_html_escape(heading_with_time)}</div>'
         "</td></tr>"
         '<tr><td style="padding:10px 20px;background-color:#f9fafb;'
         'border-bottom:1px solid #eceef1;font-size:12px;color:#6b7280;">'
