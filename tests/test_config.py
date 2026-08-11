@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import pytest
 
-from core.config import load_config, parse_trusted_senders
+from core.config import load_config, parse_notification_emails, parse_trusted_senders
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -208,6 +208,26 @@ class TestLoadConfig:
         with pytest.raises(EnvironmentError, match="NOTIFICATION_EMAIL"):
             load_config()
 
+    def test_notification_email_accepts_comma_separated_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv(
+            "NOTIFICATION_EMAIL", "security@company.com,ops@company.com"
+        )
+        cfg = load_config()
+        assert cfg.notification_email == "security@company.com, ops@company.com"
+
+    def test_notification_email_list_with_one_invalid_entry_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_full_env(monkeypatch)
+        monkeypatch.setenv(
+            "NOTIFICATION_EMAIL", "security@company.com,not-an-email"
+        )
+        with pytest.raises(EnvironmentError, match="NOTIFICATION_EMAIL"):
+            load_config()
+
     def test_invalid_imap_port_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -344,3 +364,46 @@ class TestParseTrustedSenders:
     def test_invalid_email_raises_even_when_not_required(self) -> None:
         with pytest.raises(EnvironmentError, match="invalid email"):
             parse_trusted_senders("not-an-email", required=False)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# parse_notification_emails
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestParseNotificationEmails:
+    def test_single_address_passes_through_unchanged(self) -> None:
+        assert parse_notification_emails("notify@example.com") == "notify@example.com"
+
+    def test_multiple_addresses_normalized_with_comma_space(self) -> None:
+        result = parse_notification_emails("a@company.com,b@company.com")
+        assert result == "a@company.com, b@company.com"
+
+    def test_trims_whitespace_around_each_entry(self) -> None:
+        result = parse_notification_emails(" a@company.com , b@company.com ")
+        assert result == "a@company.com, b@company.com"
+
+    def test_preserves_order_and_case(self) -> None:
+        # Unlike TRUSTED_SENDERS (an inbound-comparison set), this is an
+        # outbound "To" header -- order and casing are left as the
+        # administrator entered them, not lowercased/deduplicated.
+        result = parse_notification_emails("B@Company.com,A@company.com")
+        assert result == "B@Company.com, A@company.com"
+
+    def test_ignores_blank_entries_between_commas(self) -> None:
+        result = parse_notification_emails("a@company.com,,b@company.com,")
+        assert result == "a@company.com, b@company.com"
+
+    def test_empty_raises_when_required(self) -> None:
+        with pytest.raises(EnvironmentError, match="NOTIFICATION_EMAIL"):
+            parse_notification_emails("")
+
+    def test_empty_returns_empty_string_when_not_required(self) -> None:
+        assert parse_notification_emails("", required=False) == ""
+
+    def test_invalid_email_in_list_raises(self) -> None:
+        with pytest.raises(EnvironmentError, match="invalid email"):
+            parse_notification_emails("a@company.com,not-an-email")
+
+    def test_invalid_email_raises_even_when_not_required(self) -> None:
+        with pytest.raises(EnvironmentError, match="invalid email"):
+            parse_notification_emails("not-an-email", required=False)

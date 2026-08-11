@@ -4,6 +4,7 @@ Covers provider-agnostic IMAP connection and SMTP notification sending.
 """
 from __future__ import annotations
 
+import smtplib
 from email.message import EmailMessage
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
@@ -149,6 +150,64 @@ class TestSendNotification:
         with patch("core.email_client.smtplib.SMTP", return_value=mock_smtp):
             with pytest.raises(EmailConnectionError, match="authentication failed"):
                 send_notification(config, "Subject", "Body")
+
+
+class TestMultiRecipientNotification:
+    """``NOTIFICATION_EMAIL`` may be a comma-separated list -- see
+    core.config.parse_notification_emails. send_notification() itself needs
+    no per-recipient loop: it sets the full list verbatim as the ``To``
+    header of one message, and smtplib resolves that into one envelope
+    recipient per address when the message is actually sent."""
+
+    def test_to_header_contains_full_comma_separated_list(self) -> None:
+        config = replace(
+            _make_config(),
+            notification_email="security@company.com, ops@company.com",
+        )
+        mock_smtp = MagicMock()
+        mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+        mock_smtp.__exit__ = MagicMock(return_value=False)
+
+        with patch("core.email_client.smtplib.SMTP", return_value=mock_smtp):
+            send_notification(config, "Subject", "Body")
+
+        sent_msg: EmailMessage = mock_smtp.send_message.call_args[0][0]
+        assert sent_msg["To"] == "security@company.com, ops@company.com"
+
+    def test_smtp_resolves_comma_separated_to_header_into_each_recipient(self) -> None:
+        """Exercise the real ``smtplib.SMTP.send_message`` envelope parsing."""
+        config = replace(
+            _make_config(),
+            notification_email="security@company.com, ops@company.com",
+        )
+        mock_smtp = MagicMock()
+        mock_smtp.__enter__ = MagicMock(return_value=mock_smtp)
+        mock_smtp.__exit__ = MagicMock(return_value=False)
+
+        # The application's connection stays mocked, but its send_message call
+        # is delegated to the standard-library implementation.  This verifies
+        # that the actual SMTP envelope receives both addresses, not just that
+        # the visible message header contains a comma.
+        smtp_parser = object.__new__(smtplib.SMTP)
+        smtp_parser.ehlo_resp = b"ok"
+        smtp_parser.helo_resp = None
+        smtp_parser.does_esmtp = False
+        smtp_parser.esmtp_features = {}
+        smtp_parser.command_encoding = "ascii"
+        smtp_parser.sendmail = MagicMock(return_value={})
+        smtp_send_message = smtplib.SMTP.send_message
+        mock_smtp.send_message.side_effect = (
+            lambda msg: smtp_send_message(smtp_parser, msg)
+        )
+
+        with patch("core.email_client.smtplib.SMTP", return_value=mock_smtp):
+            send_notification(config, "Subject", "Body")
+
+        envelope_recipients = smtp_parser.sendmail.call_args.args[1]
+        assert envelope_recipients == [
+            "security@company.com",
+            "ops@company.com",
+        ]
 
 
 class TestSmtpConnectivityCheck:

@@ -434,10 +434,20 @@ def _render_notification(
             "</tr>"
         )
 
+    # Fixed pixel width (not `max-width` on a <div>) wrapped in a 100%-wide
+    # outer table with a centered <td> -- the standard "bulletproof" email
+    # layout. Classic desktop Outlook renders HTML mail with Word's engine,
+    # which ignores CSS `max-width` on a <div> but reliably honors a
+    # <table>'s `width` attribute/style, so this keeps the card at 640px
+    # (centered) instead of stretching to fill the reading pane.
     html = (
-        '<div style="font-family:Segoe UI,Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'style="border-collapse:collapse;border:1px solid #e2e4e8;border-radius:6px;overflow:hidden;">'
+        'style="border-collapse:collapse;">'
+        '<tr><td align="center" style="padding:0;">'
+        '<table role="presentation" width="640" cellpadding="0" cellspacing="0" '
+        'style="width:640px;max-width:640px;border-collapse:collapse;'
+        'font-family:Segoe UI,Arial,Helvetica,sans-serif;'
+        'border:1px solid #e2e4e8;border-radius:6px;overflow:hidden;">'
         "<tr>"
         f'<td style="background-color:{color};color:#ffffff;padding:16px 20px;'
         'font-size:16px;font-weight:700;letter-spacing:0.3px;">'
@@ -453,9 +463,13 @@ def _render_notification(
         f"{''.join(html_rows)}"
         "</table></td></tr>"
         "</table>"
-        '<p style="font-size:11px;color:#9ca3af;margin:12px 4px 0;">'
+        '<table role="presentation" width="640" cellpadding="0" cellspacing="0" '
+        'style="width:640px;max-width:640px;border-collapse:collapse;'
+        'font-family:Segoe UI,Arial,Helvetica,sans-serif;">'
+        '<tr><td style="font-size:11px;color:#9ca3af;padding:12px 4px 0;">'
         f"{_html_escape(footer)}"
-        "</p></div>"
+        "</td></tr></table>"
+        "</td></tr></table>"
     )
     return plain_text, html
 

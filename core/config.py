@@ -174,6 +174,46 @@ def parse_trusted_senders(raw: str, *, required: bool = True) -> FrozenSet[str]:
     return frozenset(e.lower() for e in entries)
 
 
+def parse_notification_emails(raw: str, *, required: bool = True) -> str:
+    """Parse a comma-separated NOTIFICATION_EMAIL value into a normalized string.
+
+    Each entry is trimmed and validated as an email address. Unlike
+    :func:`parse_trusted_senders` (used for inbound-sender comparison, where
+    order/casing don't matter), this returns a single ``", "``-joined string
+    -- the exact form used directly as the SMTP ``To`` header, which
+    ``smtplib``/``email.utils`` already parse into individual recipients.
+
+    Parameters
+    ----------
+    required:
+        When True (startup/env loading), an empty result raises. When False
+        (settings-page validation of a not-yet-saved value), an empty/blank
+        *raw* is allowed and simply returns an empty string -- callers there
+        treat "blank" as "leave the existing value unchanged".
+
+    Raises
+    ------
+    EnvironmentError
+        If *required* and no entries are present, or if any entry is not a
+        valid email address.
+    """
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not entries:
+        if required:
+            raise EnvironmentError(
+                "NOTIFICATION_EMAIL is required and cannot be empty"
+            )
+        return ""
+
+    invalid = [e for e in entries if not _EMAIL_RE.match(e)]
+    if invalid:
+        raise EnvironmentError(
+            "NOTIFICATION_EMAIL contains invalid email address(es): "
+            + ", ".join(repr(e) for e in invalid)
+        )
+    return ", ".join(entries)
+
+
 def _validate_non_empty(name: str, raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -223,9 +263,7 @@ def load_config() -> AppConfig:
     firewall_port = _validate_port("FIREWALL_PORT", os.environ["FIREWALL_PORT"])
 
     email_username = _validate_email("EMAIL_USERNAME", os.environ["EMAIL_USERNAME"])
-    notification_email = _validate_email(
-        "NOTIFICATION_EMAIL", os.environ["NOTIFICATION_EMAIL"]
-    )
+    notification_email = parse_notification_emails(os.environ["NOTIFICATION_EMAIL"])
     trusted_senders = parse_trusted_senders(trusted_senders_raw or legacy_trusted_sender_raw)
 
     smtp_username = os.environ.get("SMTP_USERNAME", "").strip() or email_username

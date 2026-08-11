@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.config import parse_trusted_senders
+from core.config import parse_notification_emails, parse_trusted_senders
 from core.env_file import read_env_pairs, write_env_pairs
 
 _ENV_PATH = str(Path(__file__).resolve().parents[2] / ".env")
@@ -86,6 +86,10 @@ _HINTS: dict[str, str] = {
     "TRUSTED_SENDERS": (
         "Comma-separated list of trusted sender email addresses, e.g. "
         "soc@company.com, alerts@company.com"
+    ),
+    "NOTIFICATION_EMAIL": (
+        "Single recipient, or a comma-separated list to notify multiple "
+        "people, e.g. security@company.com, ops@company.com"
     ),
     "DASHBOARD_HOST": (
         "Use 0.0.0.0 to make the dashboard available to other devices on "
@@ -168,6 +172,12 @@ def save_settings(form: dict[str, str]) -> list[str]:
                 errors.append(str(exc))
                 continue
             updates[key] = value
+            continue
+        if key == "NOTIFICATION_EMAIL":
+            try:
+                updates[key] = parse_notification_emails(value, required=False)
+            except EnvironmentError as exc:
+                errors.append(str(exc))
             continue
         if field_type == "number":
             try:

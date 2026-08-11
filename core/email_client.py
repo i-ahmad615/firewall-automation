@@ -290,9 +290,11 @@ def send_notification(
 ) -> None:
     """Send one notification email to ``config.notification_email``.
 
-    The application sends a single message to the configured distribution or
-    shared mailbox address. Recipient forwarding is handled by IT/mail rules —
-    this code does not manage multiple recipients.
+    ``config.notification_email`` may be a single address or a
+    comma-separated list (see :func:`core.config.parse_notification_emails`);
+    either way it is set verbatim as the ``To`` header of a single message,
+    and ``smtplib``/``email.utils`` parse that header into the individual
+    recipients when the message is sent -- every address gets its own copy.
 
     ``body`` is always sent as the plain-text part. When ``html_body`` is
     given, it is attached as the ``text/html`` alternative so HTML-capable

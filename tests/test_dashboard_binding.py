@@ -90,6 +90,50 @@ def test_settings_page_rejects_non_positive_startup_email_limit(tmp_path, monkey
     assert read_env_pairs(str(env_path))["IMAP_STARTUP_EMAIL_LIMIT"] == "10"
 
 
+def test_settings_page_saves_multiple_notification_emails(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "NOTIFICATION_EMAIL=old-notify@example.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings_service, "_ENV_PATH", str(env_path))
+
+    errors = settings_service.save_settings(
+        {
+            "NOTIFICATION_EMAIL": (
+                " security@example.com , operations@example.com "
+            )
+        }
+    )
+
+    assert errors == []
+    saved = read_env_pairs(str(env_path))
+    assert saved["NOTIFICATION_EMAIL"] == (
+        "security@example.com, operations@example.com"
+    )
+    displayed = settings_service.load_settings()["smtp"]["NOTIFICATION_EMAIL"]
+    assert displayed["value"] == "security@example.com, operations@example.com"
+
+
+def test_settings_page_rejects_invalid_notification_email_list(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "NOTIFICATION_EMAIL=old-notify@example.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings_service, "_ENV_PATH", str(env_path))
+
+    errors = settings_service.save_settings(
+        {"NOTIFICATION_EMAIL": "security@example.com, not-an-email"}
+    )
+
+    assert len(errors) == 1
+    assert "NOTIFICATION_EMAIL" in errors[0]
+    assert read_env_pairs(str(env_path))["NOTIFICATION_EMAIL"] == (
+        "old-notify@example.com"
+    )
+
+
 def test_uvicorn_receives_saved_bind_address(monkeypatch):
     captured: dict[str, object] = {}
 

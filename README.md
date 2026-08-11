@@ -239,7 +239,7 @@ DASHBOARD_ADMIN_PASSWORD=
 | `SMTP_HOST` / `SMTP_PORT` | SMTP server for sending notifications | ✓ |
 | `SMTP_USE_TLS` | `true` for STARTTLS (port 587 — Outlook); mutually exclusive with `SMTP_USE_SSL` | ✓ |
 | `SMTP_USE_SSL` | `true` for implicit SSL (port 465) | ✓ |
-| `NOTIFICATION_EMAIL` | Single recipient for block/failure notifications (shared mailbox or distro list) | ✓ |
+| `NOTIFICATION_EMAIL` | Recipient(s) for block/failure notifications — single address, shared mailbox/distro list, or a comma-separated list of individual addresses | ✓ |
 | `SMTP_FROM` | Optional From address (defaults to `EMAIL_USERNAME`); use for shared mailbox send-as | ✓ |
 | `TRUSTED_SENDERS` | Comma-separated list of sender addresses; an email is processed if it matches any of them (case-insensitive). Legacy singular `TRUSTED_SENDER` is still accepted if this is unset | ✓ |
 | `ALERT_KEYWORDS` | Comma-separated keywords; the alert's classification must match at least one | ✓ |
@@ -275,10 +275,11 @@ EMAIL_PASSWORD=<app password or service account password>
 NOTIFICATION_EMAIL=security-alerts@company.com
 ```
 
-**Notification recipient:** Set `NOTIFICATION_EMAIL` to the Outlook shared
-mailbox or distribution list IT manages. The application sends **one
-email** to that address; IT forwarding rules deliver it to the security
-team. Do not list individual recipients in code or `.env`.
+**Notification recipient(s):** Set `NOTIFICATION_EMAIL` to the Outlook shared
+mailbox or distribution list IT manages, **or** to a comma-separated list of
+individual addresses (e.g. `security@company.com, ops@company.com`) to
+notify multiple people directly. Either way, the application sends **one
+message** with all recipients on the `To` line.
 
 **Shared mailbox send-as:** If notifications must appear from a shared
 mailbox address, set `SMTP_FROM` to that address (the authenticated account
