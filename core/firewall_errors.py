@@ -19,6 +19,16 @@ def firewall_exception_message(exc: BaseException, timeout: int = 30) -> str:
     """Translate a technical firewall exception into a safe production message."""
     chain = tuple(_exception_chain(exc))
 
+    # A partial block is not a transport failure -- its message is already a
+    # safe, operator-facing summary naming which rules succeeded and which
+    # did not. Returning it verbatim keeps those names in the notification
+    # and in pending_blocks.last_error, where the retry-resolution email
+    # reads them back.
+    from .rule_updater import PartialBlockError  # local: avoids a cycle
+
+    if isinstance(exc, PartialBlockError):
+        return str(exc)
+
     if any(isinstance(item, requests.exceptions.ConnectTimeout) for item in chain):
         return f"Firewall connection timed out after {timeout} seconds"
     if any(isinstance(item, requests.exceptions.ReadTimeout) for item in chain):

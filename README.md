@@ -49,13 +49,13 @@ Origin and Impacted endpoints extracted from alert HTML
 Both endpoints classified through the database-backed Protected Endpoint Registry
         │ not whitelisted?
         ▼
-Fetch firewall rule (FIREWALL_RULE_NAME) from SFOS
+For each rule in FIREWALL_RULE_NAMES: fetch it from SFOS
         │
         ▼
-IP already in rule? ──YES──► log "already blocked", stop
+IP already in this rule? ──YES──► skip it, continue to next rule
         │ NO
         ▼
-Append IP to SourceNetworks list
+Append IP to that rule's SourceNetworks list
         │
         ▼
 Validate XML
@@ -122,7 +122,9 @@ In the SFOS GUI:
 
 1. Create (or verify) a firewall rule whose **Action** is **Reject**.
 2. Note its exact name (e.g. `Block IP`).
-3. Set `FIREWALL_RULE_NAME=Block IP` in `.env` to match exactly (case-sensitive).
+3. Set `FIREWALL_RULE_NAMES=Block IP` in `.env` to match exactly (case-sensitive).
+   To update several rules with the same IP, comma-separate them:
+   `FIREWALL_RULE_NAMES=Block IP, Block IP WAN, Block DMZ`
 
 ### 5. Configure Protected Endpoints
 
@@ -174,7 +176,7 @@ FIREWALL_HOST=192.168.20.210
 FIREWALL_PORT=20792
 FIREWALL_USERNAME=admin
 FIREWALL_PASSWORD=your_password
-FIREWALL_RULE_NAME=Block IP
+FIREWALL_RULE_NAMES=Block IP
 FIREWALL_PING_INTERVAL=60
 
 # IMAP (inbound alert polling) — Microsoft 365 / Outlook example
@@ -228,7 +230,7 @@ DASHBOARD_ADMIN_PASSWORD=
 | --- | --- | --- |
 | `FIREWALL_HOST` / `FIREWALL_PORT` | SFOS management IP/hostname and XML API port | ✓ |
 | `FIREWALL_USERNAME` / `FIREWALL_PASSWORD` | SFOS API credentials | ✓ |
-| `FIREWALL_RULE_NAME` | Exact name of the existing SFOS rule to update (e.g. `Block IP`) | ✓ |
+| `FIREWALL_RULE_NAMES` | Exact name(s) of the existing SFOS rule(s) to update. Comma-separate for several, e.g. `Block IP, Block IP WAN`. The legacy singular `FIREWALL_RULE_NAME` is still accepted | ✓ |
 | `FIREWALL_PING_INTERVAL` | Seconds between firewall connectivity checks (independent of `IMAP_POLL_INTERVAL`) | ✓ |
 | `IMAP_HOST` / `IMAP_PORT` | IMAP server for polling SOC alerts | ✓ |
 | `IMAP_USE_SSL` | `true` for implicit SSL (port 993 — Outlook/Gmail); `false` for plain IMAP | ✓ |
@@ -322,7 +324,7 @@ one. Before running:
 
 1. In the SFOS GUI, create (or verify) a firewall rule whose **Action** is **Reject**.
 2. Note the exact rule name (e.g. `Block IP`).
-3. Set `FIREWALL_RULE_NAME=Block IP` in `.env`.
+3. Set `FIREWALL_RULE_NAMES=Block IP` in `.env` (comma-separate for multiple rules).
 
 The rule's source-network list is updated automatically. All existing
 entries are preserved; only the new IP is appended (never duplicated).
@@ -473,7 +475,8 @@ the centralized Protected Endpoint Registry) rather than duplicating logic.
 | Log: `classification ... does not match ALERT_KEYWORDS` | Alert text doesn't contain a configured keyword | Check `ALERT_KEYWORDS`, or leave broad |
 | Log: `Automatic block prevented` | Endpoint is protected or the registry is unavailable | Review the Protected Endpoints page and ownership data |
 | Log: `IP ... already blocked` | IP is already in the rule | No action needed |
-| Log: `Rule ... not found` | `FIREWALL_RULE_NAME` mismatch | Copy the rule name exactly from the SFOS GUI |
+| Log: `Rule ... does not exist` | A name in `FIREWALL_RULE_NAMES` does not match SFOS | The message names the offending rule -- copy it exactly from the SFOS GUI |
+| `[PARTIAL]` notification email | IP blocked in some rules but not all | The email lists which rules failed and why; the IP is retried automatically until every rule succeeds |
 | Log: `Authentication failed` | Wrong firewall credentials | Fix `FIREWALL_USERNAME`/`FIREWALL_PASSWORD` |
 | Log: `Retry failed for ...` | Firewall still unreachable/rejecting | Check firewall connectivity; the IP retries automatically every cycle |
 | `IMAP authentication failed` | Wrong credentials or IMAP disabled | Verify `EMAIL_USERNAME`/`EMAIL_PASSWORD`; ensure IMAP is enabled |

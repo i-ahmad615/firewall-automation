@@ -18,7 +18,7 @@ _FULL_ENV: dict[str, str] = {
     "FIREWALL_PORT": "4444",
     "FIREWALL_USERNAME": "admin",
     "FIREWALL_PASSWORD": "pass",
-    "FIREWALL_RULE_NAME": "Block IP",
+    "FIREWALL_RULE_NAMES": "Block IP",
     "IMAP_HOST": "outlook.office365.com",
     "IMAP_PORT": "993",
     "EMAIL_USERNAME": "user@example.com",
@@ -60,6 +60,7 @@ class TestLoadConfig:
         for key in _FULL_ENV:
             monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv("TRUSTED_SENDER", raising=False)  # legacy alias
+        monkeypatch.delenv("FIREWALL_RULE_NAME", raising=False)  # legacy alias
         with pytest.raises(EnvironmentError, match="Missing required"):
             load_config()
 
@@ -67,8 +68,9 @@ class TestLoadConfig:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _set_full_env(monkeypatch)
-        monkeypatch.delenv("FIREWALL_RULE_NAME")
-        with pytest.raises(EnvironmentError, match="FIREWALL_RULE_NAME"):
+        monkeypatch.delenv("FIREWALL_RULE_NAMES")
+        monkeypatch.delenv("FIREWALL_RULE_NAME", raising=False)  # legacy alias
+        with pytest.raises(EnvironmentError, match="FIREWALL_RULE_NAMES"):
             load_config()
 
     def test_loads_all_required_vars(

@@ -217,7 +217,7 @@ def test_main_reaches_dashboard_without_running_startup_scan_inline(monkeypatch)
         debug_log_max_chars=2000,
         firewall_host="192.0.2.1",
         firewall_port=4444,
-        firewall_rule_name="Block IP",
+        firewall_rule_names=("Block IP",),
         firewall_ping_interval=60,
         imap_host="imap.example.com",
         imap_port=993,

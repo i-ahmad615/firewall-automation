@@ -23,7 +23,7 @@ def _config(tmp_path, *, keywords=frozenset({"new-threat"}), allowed=()) -> AppC
         firewall_port=4444,
         firewall_username="admin",
         firewall_password="secret",
-        firewall_rule_name="Block IP",
+        firewall_rule_names=("Block IP",),
         imap_host="imap.example.com",
         imap_port=993,
         imap_use_ssl=True,

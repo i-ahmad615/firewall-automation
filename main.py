@@ -141,11 +141,11 @@ def main() -> None:
     )
     logger.info("Configuration loaded", extra={"category": "Application"})
     logger.debug(
-        "Runtime configuration | firewall=%s:%s rule=%r | imap=%s:%s | "
+        "Runtime configuration | firewall=%s:%s rules=%s | imap=%s:%s | "
         "startup_limit=%d | smtp=%s:%s | dashboard=%s:%s",
         config.firewall_host,
         config.firewall_port,
-        config.firewall_rule_name,
+        ", ".join(config.firewall_rule_names),
         config.imap_host,
         config.imap_port,
         config.imap_startup_email_limit,

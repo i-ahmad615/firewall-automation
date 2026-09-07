@@ -41,7 +41,7 @@ def _mock_client(existing_ips: list[str] | None = None) -> MagicMock:
     return client
 
 
-_CONFIG = SimpleNamespace(firewall_rule_name="Block IP")
+_CONFIG = SimpleNamespace(firewall_rule_names=("Block IP",))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -444,7 +444,7 @@ class TestRetryTargetSelection:
 
         impacted_ip = "203.0.113.203"
         database.reserve_pending_block(impacted_ip, "timeout")
-        config = SimpleNamespace(firewall_rule_name="Block IP", poll_interval=60)
+        config = SimpleNamespace(firewall_rule_names=("Block IP",), poll_interval=60)
         monitor = EmailMonitor.__new__(EmailMonitor)
         monitor._config = config
 

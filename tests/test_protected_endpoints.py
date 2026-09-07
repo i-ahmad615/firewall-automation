@@ -272,7 +272,7 @@ def test_import_export_reports_individual_failures():
 def test_final_firewall_guard_blocks_protected_before_client_use(monkeypatch):
     _add("8.8.8.8", EXTERNAL_ALLOWLIST)
     client = MagicMock()
-    config = SimpleNamespace(firewall_rule_name="Block IP")
+    config = SimpleNamespace(firewall_rule_names=("Block IP",))
     assert block_ip("8.8.8.8", config, client=client) == "allowed"
     client.get_firewall_rule.assert_not_called()
 
@@ -280,7 +280,7 @@ def test_final_firewall_guard_blocks_protected_before_client_use(monkeypatch):
 def test_retry_for_protected_endpoint_stops_without_firewall_use():
     _add("8.8.4.4", EXTERNAL_ALLOWLIST)
     database.reserve_pending_block("8.8.4.4", "old timeout")
-    outcome = retry_now("8.8.4.4", SimpleNamespace(firewall_rule_name="Block IP"))
+    outcome = retry_now("8.8.4.4", SimpleNamespace(firewall_rule_names=("Block IP",)))
     assert outcome.result == "allowed"
     assert database.get_pending_block("8.8.4.4") is None
 
@@ -290,14 +290,14 @@ def test_registry_database_failure_is_fail_closed(monkeypatch):
     with pytest.raises(RegistryUnavailable):
         registry.classify_endpoint("8.8.8.8")
     with pytest.raises(RuleUpdateError, match="registry is unavailable"):
-        block_ip("8.8.8.8", SimpleNamespace(firewall_rule_name="Block IP"), client=MagicMock())
+        block_ip("8.8.8.8", SimpleNamespace(firewall_rule_names=("Block IP",)), client=MagicMock())
 
 
 def test_empty_registry_is_fail_closed():
     with pytest.raises(RegistryUnavailable):
         registry.classify_endpoint("8.8.8.8")
     with pytest.raises(RuleUpdateError, match="registry is unavailable"):
-        block_ip("8.8.8.8", SimpleNamespace(firewall_rule_name="Block IP"), client=MagicMock())
+        block_ip("8.8.8.8", SimpleNamespace(firewall_rule_names=("Block IP",)), client=MagicMock())
 
 
 def test_one_time_migration_retains_sources_and_is_idempotent(tmp_path, monkeypatch):

@@ -24,7 +24,6 @@ _REQUIRED: tuple[str, ...] = (
     "FIREWALL_PORT",
     "FIREWALL_USERNAME",
     "FIREWALL_PASSWORD",
-    "FIREWALL_RULE_NAME",
     "IMAP_HOST",
     "IMAP_PORT",
     "EMAIL_USERNAME",
@@ -35,7 +34,8 @@ _REQUIRED: tuple[str, ...] = (
     "ALERT_KEYWORDS",
 )
 # TRUSTED_SENDERS is required too, but handled separately in load_config()
-# since either it or the legacy singular TRUSTED_SENDER satisfies it.
+# since either it or the legacy singular TRUSTED_SENDER satisfies it. The same
+# applies to FIREWALL_RULE_NAMES / the legacy singular FIREWALL_RULE_NAME.
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -49,7 +49,10 @@ class AppConfig:
     firewall_port: int
     firewall_username: str
     firewall_password: str
-    firewall_rule_name: str
+    # Every rule the blocked host is appended to. Parsed from the
+    # comma-separated FIREWALL_RULE_NAMES (or legacy singular
+    # FIREWALL_RULE_NAME); always holds at least one name.
+    firewall_rule_names: tuple[str, ...]
 
     # IMAP (inbound alert polling)
     imap_host: str
@@ -99,6 +102,17 @@ class AppConfig:
     # Change ORG_NAME / APP_NAME in .env to rebrand the whole dashboard.
     org_name: str = "CPBM"
     app_name: str = "SecOps"
+
+    @property
+    def firewall_rule_name(self) -> str:
+        """First configured rule name.
+
+        Retained so the many read-only display sites (startup logging,
+        notification text, tests) keep working unchanged after the move to
+        multiple rules. Anything that actually *updates* the firewall must
+        iterate :attr:`firewall_rule_names` instead.
+        """
+        return self.firewall_rule_names[0] if self.firewall_rule_names else ""
 
 
 def _env_bool(name: str, default: str) -> bool:
@@ -214,6 +228,48 @@ def parse_notification_emails(raw: str, *, required: bool = True) -> str:
     return ", ".join(entries)
 
 
+def parse_firewall_rule_names(
+    raw: str, *, required: bool = True, key: str = "FIREWALL_RULE_NAMES"
+) -> tuple[str, ...]:
+    """Parse a comma-separated firewall-rule-name value into an ordered tuple.
+
+    A blocked IP's host object is appended to every rule named here, so
+    order is preserved (rules are processed in the order written) and exact
+    casing/spacing is kept -- SFOS rule names must match the firewall
+    exactly. Duplicates are dropped so the same rule is never processed
+    twice in one block.
+
+    A single name (the pre-multi-rule format) simply parses to a one-element
+    tuple, so existing .env files keep working unchanged.
+
+    Parameters
+    ----------
+    required:
+        When True (startup/env loading), an empty result raises. When False
+        (settings-page validation of a not-yet-saved value), a blank *raw*
+        returns an empty tuple -- callers there treat "blank" as "leave the
+        existing value unchanged".
+    key:
+        Env-var name used in error messages, so a failure points at the key
+        the administrator actually wrote.
+
+    Raises
+    ------
+    EnvironmentError
+        If *required* and no entries are present.
+    """
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not entries:
+        if required:
+            raise EnvironmentError(
+                f"{key} must contain at least one firewall rule name "
+                "(comma-separated for multiple, e.g. Block IP, Block IP WAN)"
+            )
+        return ()
+    # dict.fromkeys preserves first-seen order while removing duplicates.
+    return tuple(dict.fromkeys(entries))
+
+
 def _validate_non_empty(name: str, raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -252,6 +308,13 @@ def load_config() -> AppConfig:
     legacy_trusted_sender_raw = os.environ.get("TRUSTED_SENDER", "").strip()
     if not trusted_senders_raw and not legacy_trusted_sender_raw:
         missing.append("TRUSTED_SENDERS")
+    # FIREWALL_RULE_NAMES is the canonical (comma-separated) var; the legacy
+    # singular FIREWALL_RULE_NAME is still accepted so existing .env files
+    # keep working -- either one satisfies the requirement.
+    rule_names_raw = os.environ.get("FIREWALL_RULE_NAMES", "").strip()
+    legacy_rule_name_raw = os.environ.get("FIREWALL_RULE_NAME", "").strip()
+    if not rule_names_raw and not legacy_rule_name_raw:
+        missing.append("FIREWALL_RULE_NAMES")
     if missing:
         raise EnvironmentError(
             "Missing required environment variables: "
@@ -327,8 +390,9 @@ def load_config() -> AppConfig:
         firewall_port=firewall_port,
         firewall_username=os.environ["FIREWALL_USERNAME"],
         firewall_password=os.environ["FIREWALL_PASSWORD"],
-        firewall_rule_name=_validate_non_empty(
-            "FIREWALL_RULE_NAME", os.environ["FIREWALL_RULE_NAME"]
+        firewall_rule_names=parse_firewall_rule_names(
+            rule_names_raw or legacy_rule_name_raw,
+            key="FIREWALL_RULE_NAMES" if rule_names_raw else "FIREWALL_RULE_NAME",
         ),
         firewall_ping_interval=firewall_ping_interval,
         imap_startup_email_limit=_env_positive_int_or_default(

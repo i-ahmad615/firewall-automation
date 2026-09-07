@@ -73,8 +73,9 @@ def extract_rule_element(response_root: ET.Element, rule_name: str) -> ET.Elemen
             logger.debug("Located FirewallRule element for %r", rule_name)
             return rule
     raise RuleNotFoundError(
-        f"Firewall rule {rule_name!r} not found in SFOS response. "
-        "Verify that FIREWALL_RULE_NAME in .env matches the exact rule name in SFOS."
+        f"Firewall rule {rule_name!r} does not exist on the firewall. "
+        f"Verify that {rule_name!r} is listed in FIREWALL_RULE_NAMES in .env "
+        "exactly as it is named in SFOS (names are case-sensitive)."
     )
 
 

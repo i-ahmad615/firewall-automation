@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.config import parse_notification_emails, parse_trusted_senders
+from core.config import (
+    parse_firewall_rule_names,
+    parse_notification_emails,
+    parse_trusted_senders,
+)
 from core.env_file import read_env_pairs, write_env_pairs
 
 _ENV_PATH = str(Path(__file__).resolve().parents[2] / ".env")
@@ -18,6 +22,7 @@ MASK = "********"
 # Legacy singular env var, still read for display/migration -- see
 # core.config.load_config() for the matching backward-compat fallback.
 _LEGACY_TRUSTED_SENDER_KEY = "TRUSTED_SENDER"
+_LEGACY_RULE_NAME_KEY = "FIREWALL_RULE_NAME"
 
 # (section, key, field_type, is_secret)
 _FIELDS: list[tuple[str, str, str, bool]] = [
@@ -48,7 +53,7 @@ _FIELDS: list[tuple[str, str, str, bool]] = [
     ("firewall", "FIREWALL_PORT", "number", False),
     ("firewall", "FIREWALL_USERNAME", "text", False),
     ("firewall", "FIREWALL_PASSWORD", "password", True),
-    ("firewall", "FIREWALL_RULE_NAME", "text", False),
+    ("firewall", "FIREWALL_RULE_NAMES", "text", False),
     ("firewall", "FIREWALL_PING_INTERVAL", "number", False),
     # Application
     ("application", "DASHBOARD_HOST", "text", False),
@@ -83,6 +88,10 @@ _HINTS: dict[str, str] = {
     "IMAP_STARTUP_EMAIL_LIMIT": (
         "Latest emails checked in each configured folder when the application starts."
     ),
+    "FIREWALL_RULE_NAMES": (
+        "Firewall rule(s) the blocked IP is added to. Comma-separate to use "
+        "several, e.g. Block IP, Block IP WAN -- names must match SFOS exactly."
+    ),
     "TRUSTED_SENDERS": (
         "Comma-separated list of trusted sender email addresses, e.g. "
         "soc@company.com, alerts@company.com"
@@ -101,6 +110,7 @@ _HINTS: dict[str, str] = {
 
 _LABELS: dict[str, str] = {
     "IMAP_STARTUP_EMAIL_LIMIT": "Startup Email Limit",
+    "FIREWALL_RULE_NAMES": "Firewall Rule Names",
     "ORG_NAME": "Organization Name",
     "APP_NAME": "Software Name",
 }
@@ -120,6 +130,14 @@ def load_settings() -> dict[str, dict[str, Any]]:
             raw_value = (
                 current.get("TRUSTED_SENDERS", "")
                 or current.get(_LEGACY_TRUSTED_SENDER_KEY, "")
+                or _DEFAULTS.get(key, "")
+            )
+        elif key == "FIREWALL_RULE_NAMES":
+            # Same legacy fallback as TRUSTED_SENDERS: an existing .env that
+            # only has the singular FIREWALL_RULE_NAME still shows its value.
+            raw_value = (
+                current.get("FIREWALL_RULE_NAMES", "")
+                or current.get(_LEGACY_RULE_NAME_KEY, "")
                 or _DEFAULTS.get(key, "")
             )
         else:
@@ -168,6 +186,14 @@ def save_settings(form: dict[str, str]) -> list[str]:
         if key == "TRUSTED_SENDERS":
             try:
                 parse_trusted_senders(value, required=False)
+            except EnvironmentError as exc:
+                errors.append(str(exc))
+                continue
+            updates[key] = value
+            continue
+        if key == "FIREWALL_RULE_NAMES":
+            try:
+                parse_firewall_rule_names(value, required=False)
             except EnvironmentError as exc:
                 errors.append(str(exc))
                 continue

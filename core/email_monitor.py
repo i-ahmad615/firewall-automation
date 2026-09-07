@@ -28,7 +28,7 @@ from .endpoint_registry import (
 from .email_client import EmailConnectionError, ImapMailbox, send_notification
 from .logger import SUCCESS
 from .firewall_errors import firewall_exception_message
-from .rule_updater import block_ip, RuleUpdateError
+from .rule_updater import block_ip, PartialBlockError, RuleUpdateError
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +510,47 @@ def _notify(
     return True
 
 
+_FAILED_RULES_RE = re.compile(r"Failed in: (.+?)\.\s*$", re.DOTALL)
+_RULE_NAME_RE = re.compile(r"'((?:[^']|'')*)':")
+
+
+def _parse_failed_rules(last_error: str) -> list[str]:
+    """Recover the rule names from a stored PartialBlockError message.
+
+    ``pending_blocks.last_error`` holds the message text of whatever
+    exception queued the retry. When that was a partial block, the message
+    names the rules that failed -- this pulls them back out so the
+    resolution email can say precisely which rules the retry fixed.
+    Returns an empty list for an ordinary failed block, whose message has
+    no such section.
+    """
+    match = _FAILED_RULES_RE.search(last_error or "")
+    if not match:
+        return []
+    return [name for name in _RULE_NAME_RE.findall(match.group(1))]
+
+
+def _partial_block_rows(exc: PartialBlockError) -> list[tuple[str, Optional[str]]]:
+    """Extra notification rows describing which rules did and did not take.
+
+    Only meaningful for a partial block; the caller appends these to the
+    standard row set so the recipient can see exactly which firewall rules
+    still need attention.
+    """
+    failed_lines = [f"{name} -- {detail}" for name, detail in exc.failed]
+    return [
+        ("Blocked In Rules", ", ".join(exc.succeeded) or "None"),
+        ("Failed In Rules", '\n'.join(failed_lines)),
+    ]
+
+
+def _block_failure_status(exc: RuleUpdateError) -> tuple[str, str]:
+    """Return the ``(status, subject_tag)`` for a failed or partial block."""
+    if isinstance(exc, PartialBlockError):
+        return "PARTIALLY BLOCKED", "PARTIAL"
+    return "RETRY SCHEDULED", "ALERT"
+
+
 def _vcheck(check: str, passed: bool, message: str = "", *, skipped: bool = False) -> dict[str, str]:
     """Build one entry for the per-alert validation-results list."""
     result = "Skipped" if skipped else ("Passed" if passed else "Failed")
@@ -886,30 +927,46 @@ class EmailMonitor:
                     exc_info=True,
                     extra={"technical": True},
                 )
-                recommended_lines = ["This IP has been queued for automatic retry."]
+                is_partial = isinstance(exc, PartialBlockError)
+                status, subject_tag = _block_failure_status(exc)
+                recommended_lines = [
+                    "The remaining rule(s) have been queued for automatic retry."
+                    if is_partial
+                    else "This IP has been queued for automatic retry."
+                ]
                 if review_note:
                     recommended_lines.append(review_note.strip())
+                heading = (
+                    f"Partially blocked {candidate_ip}"
+                    if is_partial
+                    else f"Failed to block {candidate_ip}"
+                )
+                action_taken = (
+                    f"{candidate_ip} was blocked in some, but not all, "
+                    "configured firewall rules."
+                    if is_partial
+                    else f"Attempted to block {candidate_ip} -- firewall update failed."
+                )
+                rows: list[tuple[str, Optional[str]]] = [
+                    ("Alarm ID", alarm_id or "Unavailable"),
+                    ("Original Subject", subject),
+                    ("Classification", classification or "N/A"),
+                    ("Origin", origin_value or "Unavailable"),
+                    ("Origin Trust", _trust_label(decision.origin)),
+                    ("Impacted", impacted_value or "Unavailable"),
+                    ("Impacted Trust", _trust_label(decision.impacted)),
+                    ("Action Taken", action_taken),
+                ]
+                if is_partial:
+                    rows.extend(_partial_block_rows(exc))
+                rows.append(("Reason", safe_reason))
+                rows.append(("Recommended Action", '\n'.join(recommended_lines)))
                 plain_body, html_body = _render_notification(
-                    self._config,
-                    "RETRY SCHEDULED",
-                    f"Failed to block {candidate_ip}",
-                    alarm_id,
-                    [
-                        ("Alarm ID", alarm_id or "Unavailable"),
-                        ("Original Subject", subject),
-                        ("Classification", classification or "N/A"),
-                        ("Origin", origin_value or "Unavailable"),
-                        ("Origin Trust", _trust_label(decision.origin)),
-                        ("Impacted", impacted_value or "Unavailable"),
-                        ("Impacted Trust", _trust_label(decision.impacted)),
-                        ("Action Taken", f"Attempted to block {candidate_ip} -- firewall update failed."),
-                        ("Reason", safe_reason),
-                        ("Recommended Action", "\n".join(recommended_lines)),
-                    ],
+                    self._config, status, heading, alarm_id, rows,
                 )
                 notified = _notify(
                     self._config,
-                    subject=f"[ALERT] Failed to block {candidate_ip}",
+                    subject=f"[{subject_tag}] {heading}",
                     body=plain_body,
                     html_body=html_body,
                 )
@@ -1404,24 +1461,39 @@ class EmailMonitor:
             )
             notified = False
             if result == "blocked":
+                # Name the rules that were missing the IP before this retry,
+                # so the recipient sees exactly what the retry fixed rather
+                # than a generic "resolved" message. previously_failed is
+                # empty for an ordinary (non-partial) failed block.
+                previously_failed = _parse_failed_rules(entry.get("last_error") or "")
+                if previously_failed:
+                    action_taken = (
+                        f"IP {ip} was already blocked in the other configured "
+                        f"rule(s). The remaining rule(s) "
+                        f"{', '.join(repr(n) for n in previously_failed)} have now "
+                        f"been blocked successfully after {attempt_number} attempt(s)."
+                    )
+                else:
+                    action_taken = (
+                        f"IP {ip} previously failed to block but has now been "
+                        f"successfully appended to the configured firewall rule(s) "
+                        f"{', '.join(repr(n) for n in self._config.firewall_rule_names)} "
+                        f"after {attempt_number} attempt(s)."
+                    )
                 plain_body, html_body = _render_notification(
                     self._config,
                     "BLOCKED",
                     f"{ip} blocked (resolved on retry)",
                     entry.get("alarm_id") or "",
                     [
-                        (
-                            "Action Taken",
-                            f"IP {ip} previously failed to block but has now been "
-                            f"successfully appended to the firewall rule "
-                            f"'{self._config.firewall_rule_name}' after "
-                            f"{attempt_number} attempt(s).",
-                        ),
+                        ("Alarm ID", entry.get("alarm_id") or "Unavailable"),
+                        ("Action Taken", action_taken),
+                        ("Attempts", str(attempt_number)),
                     ],
                 )
                 notified = _notify(
                     self._config,
-                    subject=f"[BLOCKED] {ip} added to firewall rule (resolved on retry)",
+                    subject=f"[BLOCKED] {ip} added to firewall rule(s) (resolved on retry)",
                     body=plain_body,
                     html_body=html_body,
                 )
